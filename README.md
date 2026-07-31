@@ -2,7 +2,7 @@
 
 Source repository for the RetroDrive fullscreen Windows launcher.
 
-This repository contains source code, tests, build configuration, dependency lockfiles, and developer documentation only. It is deliberately separate from the portable RetroDrive release tree at `C:\Users\yuans\Downloads\RetroDrive`.
+This repository contains source code, tests, build configuration, dependency lockfiles, and developer documentation only. It is a nested Git repository inside the RetroDrive planning workspace, while remaining separate from the future portable release tree.
 
 ## Product Boundary
 
@@ -31,4 +31,3 @@ C:\Users\yuans\Downloads\RetroDrive\plans\07-validation-release.md
 ## Initial Status
 
 Repository initialized. Application scaffolding begins during RetroDrive Step 02.
-
