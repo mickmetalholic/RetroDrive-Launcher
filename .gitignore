@@ -1,0 +1,39 @@
+# Rust
+/target/
+**/target/
+
+# Node and frontend builds
+/node_modules/
+**/node_modules/
+/dist/
+**/dist/
+
+# Tauri bundles and local build artifacts
+/artifacts/
+*.pdb
+*.msi
+*.msix
+*.appx
+*.exe
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.pfx
+*.p12
+
+# Runtime-only files
+launcher.log
+retrodrive-runtime.cfg
+
+# Editor and OS files
+.vs/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
+
