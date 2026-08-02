@@ -5,6 +5,22 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+function Get-Sha256([string]$Path) {
+    $stream = [System.IO.File]::OpenRead($Path)
+    try {
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            return ([System.BitConverter]::ToString($sha.ComputeHash($stream))).Replace('-', '')
+        }
+        finally {
+            $sha.Dispose()
+        }
+    }
+    finally {
+        $stream.Dispose()
+    }
+}
 $rootPath = (Resolve-Path -LiteralPath $Root).Path
 $launcherDir = Join-Path $rootPath 'Launcher'
 $releaseDir = Join-Path $launcherDir 'release'
@@ -27,8 +43,8 @@ if (-not (Test-Path -LiteralPath $buildMarkerPath -PathType Leaf)) {
     throw 'Production build marker is missing. Run pnpm build:release before packaging.'
 }
 $buildMarker = Get-Content -Raw -LiteralPath $buildMarkerPath | ConvertFrom-Json
-$launcherSourceHash = (Get-FileHash -LiteralPath $launcherSource -Algorithm SHA256).Hash
-$startSourceHash = (Get-FileHash -LiteralPath $startSource -Algorithm SHA256).Hash
+$launcherSourceHash = Get-Sha256 $launcherSource
+$startSourceHash = Get-Sha256 $startSource
 if ($buildMarker.LauncherSHA256 -ne $launcherSourceHash) {
     throw 'RetroDriveLauncher.exe no longer matches the Tauri production build marker. Run pnpm build:release again.'
 }
@@ -62,11 +78,10 @@ $files = @(
 )
 $files += $runtimeFiles | ForEach-Object { Join-Path $runtimeDir $_ }
 $hashes = $files | ForEach-Object {
-    $hash = Get-FileHash -LiteralPath $_ -Algorithm SHA256
     [pscustomobject]@{
-        Path = $hash.Path.Substring($rootPath.Length).TrimStart('\').Replace('\', '/')
-        Algorithm = $hash.Algorithm
-        Hash = $hash.Hash
+        Path = $_.Substring($rootPath.Length).TrimStart('\').Replace('\', '/')
+        Algorithm = 'SHA256'
+        Hash = Get-Sha256 $_
     }
 }
 $hashJson = $hashes | ConvertTo-Json
