@@ -80,7 +80,7 @@ function render(): void {
         ${
           mode === "error"
             ? `<span><kbd>A</kbd> Retry</span><span><kbd>B</kbd> Back</span>`
-            : `<span><kbd>A</kbd> Open</span><span><kbd>Start</kbd> RetroBat</span><span><kbd>B</kbd> Exit</span>`
+            : `<span><kbd>A</kbd> Open</span><span><kbd>B</kbd> Exit</span>`
         }
       </footer>
     </main>`;
@@ -212,7 +212,6 @@ function pollGamepads(now: number): void {
       Boolean(pad.buttons[index]?.pressed) && !Boolean(memory.buttons[index]);
     if (pressedEdge(0)) confirmAction();
     if (pressedEdge(1)) backAction();
-    if (pressedEdge(9) && mode === "home") void launch("retrobat");
     memory.buttons = pad.buttons.map((button) => button.pressed);
     memory.horizontal = horizontal;
     padMemory.set(pad.index, memory);

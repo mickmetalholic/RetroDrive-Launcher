@@ -120,8 +120,8 @@ button { font: inherit; }
   width: clamp(108px, 12vw, 190px);
   aspect-ratio: 1;
   justify-self: center;
-  opacity: .56;
-  filter: grayscale(1);
+  opacity: .72;
+  filter: grayscale(.35);
   transition: opacity 180ms ease, filter 180ms ease, transform 180ms ease;
 }
 

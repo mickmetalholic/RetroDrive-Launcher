@@ -3,7 +3,7 @@
 1. Connect the drive to a 64-bit Windows 10 22H2 or Windows 11 PC.
 2. Run `START.exe` from the drive root.
 3. Use the D-pad or arrow keys to choose RetroBat or RetroArch.
-4. Press A or Enter to open the selected application. Press Start to open RetroBat immediately.
+4. Press A or Enter to open the selected application.
 5. Close the emulator frontend to return to RetroDrive.
 6. Close RetroDrive, then use Windows **Safely Remove Hardware** before unplugging the drive.
 
@@ -11,7 +11,6 @@
 
 - D-pad / Arrow keys: move focus
 - A / Enter: open
-- Start: open RetroBat
 - B / Backspace / Escape: exit or go back
 
 ## Runtime recovery
