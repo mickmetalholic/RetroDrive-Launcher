@@ -21,13 +21,31 @@ This repository contains source code, tests, build configuration, dependency loc
 - Build output: copied into a staging RetroDrive tree only after tests pass
 - Production replacement: performed from a validated staging build, never directly from a development build directory
 
-The detailed implementation, security, packaging, and acceptance requirements are maintained in:
+The detailed implementation, security, packaging, and acceptance requirements are maintained in the adjacent planning workspace:
 
 ```text
-C:\Users\yuans\Downloads\RetroDrive\plans\02-launcher.md
-C:\Users\yuans\Downloads\RetroDrive\plans\07-validation-release.md
+..\plans\02-launcher.md
+..\plans\07-validation-release.md
 ```
 
-## Initial Status
+## Development
 
-Repository initialized. Application scaffolding begins during RetroDrive Step 02.
+Requirements: Node.js 24, pnpm 10.33.2, Rust 1.97.1, and the Visual Studio C++
+desktop workload.
+
+```powershell
+pnpm install --frozen-lockfile
+pnpm check
+pnpm build:release
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-portable.ps1 -Root D:\
+```
+
+`build:release` is the only supported release-binary build path. It creates the
+Tauri production launcher first, builds only `START.exe` afterward, and records
+both hashes. Do not run `cargo build --release --bins` between this command and
+packaging: a plain Cargo build does not establish the Tauri production frontend
+contract.
+
+The portable packaging script validates the external RetroDrive root and the
+recorded production hashes before it copies release binaries. It never copies
+ROMs, firmware, keys, saves, or emulator binaries into this repository.

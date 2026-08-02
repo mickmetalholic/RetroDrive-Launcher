@@ -10,6 +10,7 @@
 
 # Tauri bundles and local build artifacts
 /artifacts/
+/staging/
 *.pdb
 *.msi
 *.msix
@@ -28,6 +29,7 @@
 # Runtime-only files
 launcher.log
 retrodrive-runtime.cfg
+src-tauri/gen/
 
 # Editor and OS files
 .vs/
@@ -36,4 +38,3 @@ retrodrive-runtime.cfg
 .DS_Store
 Thumbs.db
 Desktop.ini
-

@@ -1,0 +1,36 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "RetroDrive",
+  "version": "0.1.0",
+  "identifier": "local.retrodrive.launcher",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "RetroDrive",
+        "fullscreen": true,
+        "decorations": false,
+        "resizable": true,
+        "visible": true,
+        "focus": true,
+        "devtools": false,
+        "backgroundColor": "#040812"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' asset: data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": false,
+    "targets": "nsis",
+    "icon": ["icons/icon.ico"],
+    "resources": []
+  }
+}
