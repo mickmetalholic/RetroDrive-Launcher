@@ -40,7 +40,6 @@ desktop workload.
 pnpm install --frozen-lockfile
 pnpm check
 pnpm build:release
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/create-release.ps1 -Version 0.2.0
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-portable.ps1 -Root D:\
 ```
 
@@ -55,3 +54,13 @@ recorded production hashes before it copies release binaries. It never copies
 ROMs, firmware, keys, saves, or emulator binaries into this repository.
 
 See [docs/UPDATES.md](docs/UPDATES.md) for the signed update protocol, strict file boundary, rollback behavior, and publishing procedure.
+
+## Release
+
+For a normal bug-fix release, run one command from a clean, synchronized `main` branch:
+
+```powershell
+pnpm release:patch
+```
+
+`release:minor` and `release:major` are available for larger version changes. The command starts the GitHub workflow, follows it through completion, and fast-forwards the local checkout to the automated version commit. The same operation is available from **Actions → Release portable launcher → Run workflow** without a local development environment.
