@@ -2,12 +2,15 @@
 
 Source repository for the RetroDrive fullscreen Windows launcher.
 
+[Releases](https://github.com/mickmetalholic/RetroDrive-Launcher/releases) provide signed, portable launcher-only updates. The launcher remains fully usable when the update service or internet connection is unavailable.
+
 This repository contains source code, tests, build configuration, dependency lockfiles, and developer documentation only. It is a nested Git repository inside the RetroDrive planning workspace, while remaining separate from the future portable release tree.
 
 ## Product Boundary
 
 - `START.exe` is a small native Rust Windows-subsystem bootstrapper.
 - `RetroDriveLauncher.exe` is a Tauri 2 application with a Rust backend and vanilla TypeScript/HTML/CSS frontend.
+- `Updater.exe` is a native transactional updater that runs from a temporary copy so every launcher-owned executable can be replaced safely.
 - The launcher exposes only RetroBat and independent RetroArch.
 - Runtime executables are resolved from manifest-approved paths below the attached RetroDrive root.
 - ROMs, BIOS files, firmware, encryption keys, saves, credentials, and emulator binaries must never be committed to this repository.
@@ -17,7 +20,7 @@ This repository contains source code, tests, build configuration, dependency loc
 - Default branch: `main`
 - Normal work: short-lived topic branches
 - Rust and JavaScript dependencies: committed lockfiles
-- Releases: annotated Git tags matching the RetroDrive release identifier
+- Releases: annotated SemVer tags such as `v0.2.0`, built and signed by GitHub Actions
 - Build output: copied into a staging RetroDrive tree only after tests pass
 - Production replacement: performed from a validated staging build, never directly from a development build directory
 
@@ -37,6 +40,7 @@ desktop workload.
 pnpm install --frozen-lockfile
 pnpm check
 pnpm build:release
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/create-release.ps1 -Version 0.2.0
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-portable.ps1 -Root D:\
 ```
 
@@ -49,3 +53,5 @@ contract.
 The portable packaging script validates the external RetroDrive root and the
 recorded production hashes before it copies release binaries. It never copies
 ROMs, firmware, keys, saves, or emulator binaries into this repository.
+
+See [docs/UPDATES.md](docs/UPDATES.md) for the signed update protocol, strict file boundary, rollback behavior, and publishing procedure.

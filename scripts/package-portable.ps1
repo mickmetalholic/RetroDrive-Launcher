@@ -31,6 +31,7 @@ $projectDir = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 $materialsDir = (Resolve-Path -LiteralPath (Join-Path $projectDir '..\materials\packages\prerequisites\microsoft')).Path
 $launcherSource = Join-Path $targetDir 'RetroDriveLauncher.exe'
 $startSource = Join-Path $targetDir 'START.exe'
+$updaterSource = Join-Path $targetDir 'Updater.exe'
 $buildMarkerPath = Join-Path $targetDir 'RETRODRIVE-PRODUCTION-BUILD.json'
 
 if (-not (Test-Path -LiteralPath (Join-Path $rootPath 'RetroBat\RetroBat.exe') -PathType Leaf)) {
@@ -45,19 +46,37 @@ if (-not (Test-Path -LiteralPath $buildMarkerPath -PathType Leaf)) {
 $buildMarker = Get-Content -Raw -LiteralPath $buildMarkerPath | ConvertFrom-Json
 $launcherSourceHash = Get-Sha256 $launcherSource
 $startSourceHash = Get-Sha256 $startSource
+$updaterSourceHash = Get-Sha256 $updaterSource
 if ($buildMarker.LauncherSHA256 -ne $launcherSourceHash) {
     throw 'RetroDriveLauncher.exe no longer matches the Tauri production build marker. Run pnpm build:release again.'
 }
 if ($buildMarker.StartSHA256 -ne $startSourceHash) {
     throw 'START.exe no longer matches the production build marker. Run pnpm build:release again.'
 }
+if ($buildMarker.UpdaterSHA256 -ne $updaterSourceHash) {
+    throw 'Updater.exe no longer matches the production build marker. Run pnpm build:release again.'
+}
 
 New-Item -ItemType Directory -Force -Path $launcherDir, $releaseDir, $assetsDir, $runtimeDir, (Join-Path $launcherDir 'data') | Out-Null
 Copy-Item -LiteralPath $launcherSource -Destination (Join-Path $launcherDir 'RetroDriveLauncher.exe') -Force
 Copy-Item -LiteralPath $startSource -Destination (Join-Path $rootPath 'START.exe') -Force
+Copy-Item -LiteralPath $updaterSource -Destination (Join-Path $launcherDir 'Updater.exe') -Force
 Copy-Item -LiteralPath (Join-Path $projectDir 'public\assets\icons\retrobat.png') -Destination $assetsDir -Force
 Copy-Item -LiteralPath (Join-Path $projectDir 'public\assets\icons\retroarch.png') -Destination $assetsDir -Force
 Copy-Item -LiteralPath (Join-Path $projectDir 'docs\USER-GUIDE.md') -Destination $releaseDir -Force
+
+$packageVersion = (Get-Content -Raw -LiteralPath (Join-Path $projectDir 'package.json') | ConvertFrom-Json).version
+$versionRecord = [ordered]@{
+    SchemaVersion = 1
+    Version = $packageVersion
+    UpdateChannel = 'stable'
+    UpdateManifest = 'https://github.com/mickmetalholic/RetroDrive-Launcher/releases/latest/download/latest.json'
+}
+[System.IO.File]::WriteAllText(
+    (Join-Path $releaseDir 'VERSION.json'),
+    ($versionRecord | ConvertTo-Json),
+    [System.Text.UTF8Encoding]::new($false)
+)
 
 $runtimeFiles = @(
     'MicrosoftEdgeWebView2RuntimeInstallerX64.exe',
@@ -72,9 +91,11 @@ foreach ($runtimeFile in $runtimeFiles) {
 $files = @(
     (Join-Path $rootPath 'START.exe'),
     (Join-Path $launcherDir 'RetroDriveLauncher.exe'),
+    (Join-Path $launcherDir 'Updater.exe'),
     (Join-Path $rootPath 'launcher.json'),
     (Join-Path $assetsDir 'retrobat.png'),
     (Join-Path $assetsDir 'retroarch.png')
+    (Join-Path $releaseDir 'VERSION.json')
 )
 $files += $runtimeFiles | ForEach-Object { Join-Path $runtimeDir $_ }
 $hashes = $files | ForEach-Object {
@@ -109,10 +130,11 @@ $provenance = [ordered]@{
     NodeEngine = '24.x'
     Pnpm = '10.33.2'
     LauncherBuildCommand = $buildMarker.LauncherBuildCommand
-    StartBuildCommand = $buildMarker.StartBuildCommand
+    HelperBuildCommand = $buildMarker.HelperBuildCommand
     BuiltAtUtc = $buildMarker.BuiltAtUtc
     LauncherSHA256 = $launcherSourceHash
     StartSHA256 = $startSourceHash
+    UpdaterSHA256 = $updaterSourceHash
 }
 $provenanceJson = $provenance | ConvertTo-Json
 $provenancePath = Join-Path $releaseDir 'BUILD-PROVENANCE.json'

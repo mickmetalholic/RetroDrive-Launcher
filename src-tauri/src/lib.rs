@@ -168,7 +168,10 @@ fn wait_for_process_session(process_name: &str) -> Result<(), String> {
 
 fn validate_manifest(manifest: &Manifest) -> Result<(), String> {
     if manifest.schema_version != 1 {
-        return Err(format!("Unsupported schema version {}", manifest.schema_version));
+        return Err(format!(
+            "Unsupported schema version {}",
+            manifest.schema_version
+        ));
     }
     if manifest.ui.title != "RetroDrive" || !manifest.ui.start_launches_default {
         return Err("Unsupported launcher UI contract".into());
@@ -185,7 +188,12 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), String> {
             return Err(format!("Unsupported wait mode: {}", entry.wait.mode));
         }
         if entry.wait.mode == "processName"
-            && entry.wait.process_name.as_deref().unwrap_or_default().is_empty()
+            && entry
+                .wait
+                .process_name
+                .as_deref()
+                .unwrap_or_default()
+                .is_empty()
         {
             return Err(format!("Missing process name: {}", entry.id));
         }
@@ -243,7 +251,13 @@ fn load_state() -> Result<LauncherState, String> {
 }
 
 fn write_log(state: &LauncherState, message: &str) {
-    if state.log_path.metadata().map(|meta| meta.len()).unwrap_or(0) >= LOG_LIMIT {
+    if state
+        .log_path
+        .metadata()
+        .map(|meta| meta.len())
+        .unwrap_or(0)
+        >= LOG_LIMIT
+    {
         let rotated = state.log_path.with_extension("log.1");
         let _ = fs::remove_file(&rotated);
         let _ = fs::rename(&state.log_path, rotated);
@@ -297,7 +311,10 @@ async fn launch_entry(
     state: tauri::State<'_, LauncherState>,
 ) -> Result<(), String> {
     {
-        let active = state.active.lock().map_err(|_| "Launcher state is unavailable")?;
+        let active = state
+            .active
+            .lock()
+            .map_err(|_| "Launcher state is unavailable")?;
         if active.is_some() {
             return Err("A child session is already active".into());
         }
@@ -321,15 +338,23 @@ async fn launch_entry(
         .args(&entry.arguments)
         .spawn()
         .map_err(|error| {
-            write_log(&state, &format!("launch-failed id={} detail={error}", entry.id));
+            write_log(
+                &state,
+                &format!("launch-failed id={} detail={error}", entry.id),
+            );
             format!("Unable to start {}", entry.title)
         })?;
     let pid = child.id();
-    *state.active.lock().map_err(|_| "Launcher state is unavailable")? =
-        Some((entry.id.clone(), pid));
+    *state
+        .active
+        .lock()
+        .map_err(|_| "Launcher state is unavailable")? = Some((entry.id.clone(), pid));
     write_log(
         &state,
-        &format!("process-start id={} executable={} pid={pid}", entry.id, entry.executable),
+        &format!(
+            "process-start id={} executable={} pid={pid}",
+            entry.id, entry.executable
+        ),
     );
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.hide();
@@ -360,18 +385,27 @@ async fn launch_entry(
                     &format!(
                         "process-exit id={} code={}",
                         entry_for_wait.id,
-                        status.code().map(|code| code.to_string()).unwrap_or_else(|| "none".into())
+                        status
+                            .code()
+                            .map(|code| code.to_string())
+                            .unwrap_or_else(|| "none".into())
                     ),
                 ),
                 Err(error) => write_log(
                     &state,
-                    &format!("process-wait-failed id={} detail={error}", entry_for_wait.id),
+                    &format!(
+                        "process-wait-failed id={} detail={error}",
+                        entry_for_wait.id
+                    ),
                 ),
             }
             if let Err(error) = &tracked_result {
                 write_log(
                     &state,
-                    &format!("tracked-process-failed id={} detail={error}", entry_for_wait.id),
+                    &format!(
+                        "tracked-process-failed id={} detail={error}",
+                        entry_for_wait.id
+                    ),
                 );
             }
         }
@@ -402,7 +436,10 @@ pub fn run() {
     let webview_data = state.root.join("Launcher").join("data").join("webview2");
     let _ = fs::create_dir_all(&webview_data);
     std::env::set_var("WEBVIEW2_USER_DATA_FOLDER", &webview_data);
-    write_log(&state, &format!("launcher-start version={}", env!("CARGO_PKG_VERSION")));
+    write_log(
+        &state,
+        &format!("launcher-start version={}", env!("CARGO_PKG_VERSION")),
+    );
 
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
@@ -428,7 +465,12 @@ mod tests {
 
     #[test]
     fn relative_path_rules_reject_escape_and_absolute_paths() {
-        for value in ["", "../RetroBat.exe", "C:/RetroBat.exe", "\\\\server\\share\\app.exe"] {
+        for value in [
+            "",
+            "../RetroBat.exe",
+            "C:/RetroBat.exe",
+            "\\\\server\\share\\app.exe",
+        ] {
             assert!(safe_relative(value).is_err(), "{value} should be rejected");
         }
         assert!(safe_relative("RetroBat/RetroBat.exe").is_ok());
@@ -446,12 +488,18 @@ mod tests {
             working_directory: "RetroBat".into(),
             arguments: vec![],
             primary: true,
-            wait: WaitPolicy { mode: "none".into(), process_name: None },
+            wait: WaitPolicy {
+                mode: "none".into(),
+                process_name: None,
+            },
         };
         let manifest = Manifest {
             schema_version: 1,
             default_entry: "retrobat".into(),
-            ui: ManifestUi { title: "RetroDrive".into(), start_launches_default: true },
+            ui: ManifestUi {
+                title: "RetroDrive".into(),
+                start_launches_default: true,
+            },
             entries: vec![entry],
         };
         assert!(validate_manifest(&manifest).is_err());

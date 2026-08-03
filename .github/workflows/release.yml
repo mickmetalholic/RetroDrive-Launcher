@@ -1,0 +1,67 @@
+name: Release portable launcher
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify toolchains
+        shell: pwsh
+        run: |
+          node --version
+          pnpm --version
+          rustc --version
+          cargo --version
+
+      - name: Test source
+        run: pnpm check
+
+      - name: Build production binaries
+        run: pnpm build:release
+
+      - name: Create signed portable assets
+        shell: pwsh
+        env:
+          RETRODRIVE_SIGNING_PRIVATE_KEY: ${{ secrets.RETRODRIVE_SIGNING_PRIVATE_KEY }}
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          pnpm release:portable -Version $version -Tag $env:GITHUB_REF_NAME -Notes "RetroDrive Launcher $version"
+
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create $env:GITHUB_REF_NAME `
+            artifacts/release/RetroDrive-Launcher-${env:GITHUB_REF_NAME}.zip `
+            artifacts/release/latest.json `
+            artifacts/release/SHA256SUMS.txt `
+            --title "RetroDrive Launcher $env:GITHUB_REF_NAME" `
+            --generate-notes `
+            --verify-tag
