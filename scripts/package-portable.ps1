@@ -141,3 +141,7 @@ $provenancePath = Join-Path $releaseDir 'BUILD-PROVENANCE.json'
 [System.IO.File]::WriteAllText($provenancePath, $provenanceJson, [System.Text.UTF8Encoding]::new($false))
 
 Write-Output "Portable launcher copied to $rootPath"
+# `git describe --exact-match` is expected to return non-zero for untagged
+# deployment commits. Do not leak that probe status to callers after packaging
+# has completed successfully.
+$global:LASTEXITCODE = 0
