@@ -49,7 +49,9 @@ All three version declarations must match:
 
 The GitHub repository stores the 32-byte Base64 release seed as the Actions secret `RETRODRIVE_SIGNING_PRIVATE_KEY`. Never commit or distribute it.
 
-For a routine release, use one of these commands from a clean `main` branch that exactly matches `origin/main`:
+Launcher code merged or pushed to `main` automatically receives the next patch version and is published after all checks and the production build pass. Pull requests run CI automatically but never publish. Documentation-only changes run CI on `main` and are excluded from automatic releases.
+
+For an explicit release, use one of these commands from a clean `main` branch that exactly matches `origin/main`:
 
 ```powershell
 pnpm release:patch
@@ -66,6 +68,6 @@ The same operation is available in the GitHub web interface:
 3. Choose **Run workflow**.
 4. Select `patch`, `minor`, or `major`; optionally add a short update summary.
 
-GitHub calculates the next version, updates all four version sources, commits the version change, creates the annotated tag, tests the source, builds the production binaries, creates the allowlisted portable ZIP, signs `latest.json`, writes `SHA256SUMS.txt`, and publishes the Release. A concurrency lock prevents two stable releases from running at the same time.
+For automatic patch releases and explicit releases, GitHub calculates the next version, updates all four version sources, commits the version change, creates the annotated tag, tests the source, builds the production binaries, creates the allowlisted portable ZIP, signs `latest.json`, writes `SHA256SUMS.txt`, and publishes the Release. A concurrency lock prevents two stable releases from running at the same time.
 
 Pushing a correctly prepared `vX.Y.Z` tag remains supported as an emergency path. The workflow rejects the tag unless all four source versions already match it.

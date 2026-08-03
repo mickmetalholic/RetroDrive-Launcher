@@ -57,10 +57,12 @@ See [docs/UPDATES.md](docs/UPDATES.md) for the signed update protocol, strict fi
 
 ## Release
 
-For a normal bug-fix release, run one command from a clean, synchronized `main` branch:
+Every Launcher code change merged or pushed to `main` automatically runs CI and publishes the next patch release. Documentation-only changes run CI but do not create a Release.
+
+For an explicit release, run one command from a clean, synchronized `main` branch:
 
 ```powershell
 pnpm release:patch
 ```
 
-`release:minor` and `release:major` are available for larger version changes. The command starts the GitHub workflow, follows it through completion, and fast-forwards the local checkout to the automated version commit. The same operation is available from **Actions → Release portable launcher → Run workflow** without a local development environment.
+`release:minor` and `release:major` are available for larger version changes. The command starts the GitHub workflow, follows it through completion, and fast-forwards the local checkout to the automated version commit. The same operation is available from **Actions → Release portable launcher → Run workflow** without a local development environment. Pull requests run CI automatically and never publish a Release before merge.

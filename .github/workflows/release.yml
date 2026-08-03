@@ -17,8 +17,21 @@ on:
         required: false
         type: string
   push:
+    branches:
+      - main
     tags:
       - "v*"
+    paths:
+      - ".github/workflows/release.yml"
+      - "index.html"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "public/**"
+      - "scripts/**"
+      - "src/**"
+      - "src-tauri/**"
+      - "tsconfig.json"
+      - "vite.config.ts"
 
 permissions:
   contents: write
@@ -58,11 +71,13 @@ jobs:
         shell: pwsh
         env:
           EVENT_NAME: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
           REQUESTED_BUMP: ${{ inputs.bump }}
           REQUESTED_NOTES: ${{ inputs.notes }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          if ($env:EVENT_NAME -eq 'workflow_dispatch') {
+          $automaticPatch = $env:EVENT_NAME -eq 'push' -and $env:REF_TYPE -eq 'branch'
+          if ($env:EVENT_NAME -eq 'workflow_dispatch' -or $automaticPatch) {
             $current = (& node scripts/version.mjs current).Trim()
             if ($LASTEXITCODE -ne 0) { throw 'Unable to read the current version.' }
             $currentTag = "v$current"
@@ -82,7 +97,8 @@ jobs:
               Write-Output "Retrying incomplete release $tag"
             }
             else {
-              $version = (& node scripts/version.mjs bump $env:REQUESTED_BUMP).Trim()
+              $bump = if ($automaticPatch) { 'patch' } else { $env:REQUESTED_BUMP }
+              $version = (& node scripts/version.mjs bump $bump).Trim()
               if ($LASTEXITCODE -ne 0) { throw 'Version update failed.' }
               $tag = "v$version"
               $publishRef = 'true'
@@ -133,7 +149,7 @@ jobs:
           pnpm release:portable -Version $env:RELEASE_VERSION -Tag $env:RELEASE_TAG -Notes $env:RELEASE_NOTES
 
       - name: Commit version and publish tag
-        if: github.event_name == 'workflow_dispatch' && steps.release.outputs.publish_ref == 'true'
+        if: steps.release.outputs.publish_ref == 'true'
         shell: pwsh
         env:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
