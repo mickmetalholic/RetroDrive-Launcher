@@ -47,11 +47,27 @@ All three version declarations must match:
 - `src-tauri/Cargo.toml`
 - `src-tauri/tauri.conf.json`
 
-The GitHub repository stores the 32-byte Base64 release seed as the Actions secret `RETRODRIVE_SIGNING_PRIVATE_KEY`. Never commit or distribute it. To publish a release:
+The GitHub repository stores the 32-byte Base64 release seed as the Actions secret `RETRODRIVE_SIGNING_PRIVATE_KEY`. Never commit or distribute it.
+
+Launcher code merged or pushed to `main` automatically receives the next patch version and is published after all checks and the production build pass. Pull requests run CI automatically but never publish. Documentation-only changes run CI on `main` and are excluded from automatic releases.
+
+For an explicit release, use one of these commands from a clean `main` branch that exactly matches `origin/main`:
 
 ```powershell
-git tag -a v0.3.0 -m "RetroDrive Launcher v0.3.0"
-git push origin v0.3.0
+pnpm release:patch
+pnpm release:minor
+pnpm release:major
 ```
 
-The release workflow tests the source, builds all production binaries, creates the allowlisted portable ZIP, signs `latest.json`, writes `SHA256SUMS.txt`, and publishes all three files to GitHub Releases.
+The local command asks GitHub to perform the release, follows the run until completion, and then fast-forwards local `main`. No local release build or signing key is needed.
+
+The same operation is available in the GitHub web interface:
+
+1. Open **Actions**.
+2. Select **Release portable launcher**.
+3. Choose **Run workflow**.
+4. Select `patch`, `minor`, or `major`; optionally add a short update summary.
+
+For automatic patch releases and explicit releases, GitHub calculates the next version, updates all four version sources, commits the version change, creates the annotated tag, tests the source, builds the production binaries, creates the allowlisted portable ZIP, signs `latest.json`, writes `SHA256SUMS.txt`, and publishes the Release. A concurrency lock prevents two stable releases from running at the same time.
+
+Pushing a correctly prepared `vX.Y.Z` tag remains supported as an emergency path. The workflow rejects the tag unless all four source versions already match it.
