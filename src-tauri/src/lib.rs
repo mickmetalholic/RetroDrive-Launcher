@@ -1,12 +1,14 @@
+use fs2::{available_space, total_space};
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, OpenOptions},
     io::Write,
+    os::windows::process::CommandExt,
     path::{Component, Path, PathBuf},
     process::Command,
     sync::Mutex,
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::{Emitter, Manager};
 use windows::Win32::{
@@ -18,6 +20,12 @@ use windows::Win32::{
 };
 
 mod skill_sync;
+#[path = "update_common.rs"]
+mod update_common;
+
+use update_common::{verify_package, UpdateManifest, UPDATE_MANIFEST_URL};
+
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 const LOG_LIMIT: u64 = 256 * 1024;
 
@@ -75,6 +83,55 @@ struct PublicState {
     version: &'static str,
     default_entry: String,
     active_entry: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PublicEmulator {
+    name: String,
+    path: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PublicPlatform {
+    name: String,
+    game_files: u64,
+    bytes: u64,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PublicDriveOverview {
+    root: String,
+    drive: String,
+    total_bytes: u64,
+    free_bytes: u64,
+    used_bytes: u64,
+    rom_root: String,
+    platform_count: u64,
+    systems_with_games: u64,
+    game_files: u64,
+    game_bytes: u64,
+    save_bytes: u64,
+    emulator_count: u64,
+    retro_arch_core_count: u64,
+    emulators: Vec<PublicEmulator>,
+    platforms: Vec<PublicPlatform>,
+    warnings: Vec<String>,
+    scanned_at_unix: u64,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PublicUpdate {
+    current_version: &'static str,
+    available_version: Option<String>,
+    published_at: Option<String>,
+    notes: Option<String>,
+    checked_at_unix: Option<u64>,
+    status: String,
+    detail: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -278,6 +335,458 @@ fn write_log(state: &LauncherState, message: &str) {
     }
 }
 
+const GAME_EXTENSIONS: &[&str] = &[
+    "3ds", "7z", "app", "bin", "ccd", "cdi", "chd", "cia", "cso", "cue", "dsk", "elf", "gba", "gb",
+    "gbc", "gdi", "img", "iso", "m3u", "md", "nes", "nds", "nsp", "pbp", "pkg", "psvita", "rar",
+    "rvz", "sfc", "smc", "sms", "sub", "v64", "vpk", "wad", "wbfs", "wux", "xci", "z64", "zip",
+];
+
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or_default()
+}
+
+fn push_scan_warning(warnings: &mut Vec<String>, message: String) {
+    if warnings.len() < 20 {
+        warnings.push(message);
+    }
+}
+
+fn is_game_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| {
+            GAME_EXTENSIONS
+                .iter()
+                .any(|accepted| extension.eq_ignore_ascii_case(accepted))
+        })
+        .unwrap_or(false)
+}
+
+fn scan_platform(
+    directory: &Path,
+    game_files: &mut u64,
+    game_bytes: &mut u64,
+    warnings: &mut Vec<String>,
+) {
+    let mut pending = vec![directory.to_path_buf()];
+    while let Some(current) = pending.pop() {
+        let entries = match fs::read_dir(&current) {
+            Ok(entries) => entries,
+            Err(error) => {
+                push_scan_warning(
+                    warnings,
+                    format!("Unable to scan {}: {error}", current.display()),
+                );
+                continue;
+            }
+        };
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) => {
+                    push_scan_warning(warnings, error.to_string());
+                    continue;
+                }
+            };
+            let path = entry.path();
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(error) => {
+                    push_scan_warning(
+                        warnings,
+                        format!("Unable to inspect {}: {error}", path.display()),
+                    );
+                    continue;
+                }
+            };
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_dir() {
+                pending.push(path);
+            } else if file_type.is_file() && is_game_file(&path) {
+                match entry.metadata() {
+                    Ok(metadata) => {
+                        *game_files += 1;
+                        *game_bytes = game_bytes.saturating_add(metadata.len());
+                    }
+                    Err(error) => push_scan_warning(
+                        warnings,
+                        format!("Unable to read {}: {error}", path.display()),
+                    ),
+                }
+            }
+        }
+    }
+}
+
+fn scan_directory_bytes(directory: &Path, warnings: &mut Vec<String>) -> u64 {
+    let mut pending = vec![directory.to_path_buf()];
+    let mut bytes: u64 = 0;
+    while let Some(current) = pending.pop() {
+        let entries = match fs::read_dir(&current) {
+            Ok(entries) => entries,
+            Err(error) => {
+                if current.exists() {
+                    push_scan_warning(
+                        warnings,
+                        format!("Unable to scan {}: {error}", current.display()),
+                    );
+                }
+                continue;
+            }
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_dir() {
+                pending.push(path);
+            } else if file_type.is_file() {
+                if let Ok(metadata) = entry.metadata() {
+                    bytes = bytes.saturating_add(metadata.len());
+                }
+            }
+        }
+    }
+    bytes
+}
+
+fn drive_name(root: &Path) -> String {
+    let value = root.to_string_lossy();
+    if value.len() >= 2 && value.as_bytes().get(1) == Some(&b':') {
+        value[..2].to_string()
+    } else {
+        "Portable".to_string()
+    }
+}
+
+fn drive_overview(root: &Path) -> Result<PublicDriveOverview, String> {
+    let total_bytes =
+        total_space(root).map_err(|error| format!("Unable to read disk size: {error}"))?;
+    let free_bytes = available_space(root)
+        .map_err(|error| format!("Unable to read disk free space: {error}"))?;
+    let mut warnings = Vec::new();
+
+    let rom_root = if root.join("roms").is_dir() {
+        root.join("roms")
+    } else {
+        root.join("RetroBat").join("roms")
+    };
+    let mut platforms = Vec::new();
+    if rom_root.is_dir() {
+        let entries = fs::read_dir(&rom_root)
+            .map_err(|error| format!("Unable to scan ROM root {}: {error}", rom_root.display()))?;
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) => {
+                    push_scan_warning(&mut warnings, error.to_string());
+                    continue;
+                }
+            };
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if !file_type.is_dir() || file_type.is_symlink() {
+                continue;
+            }
+            let mut game_files = 0;
+            let mut game_bytes = 0;
+            scan_platform(&path, &mut game_files, &mut game_bytes, &mut warnings);
+            if game_files > 0 {
+                platforms.push(PublicPlatform {
+                    name: entry.file_name().to_string_lossy().into_owned(),
+                    game_files,
+                    bytes: game_bytes,
+                });
+            }
+        }
+    } else {
+        push_scan_warning(
+            &mut warnings,
+            format!("ROM directory is unavailable: {}", rom_root.display()),
+        );
+    }
+
+    let platform_count = fs::read_dir(&rom_root)
+        .ok()
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter_map(|entry| entry.file_type().ok())
+                .filter(|file_type| file_type.is_dir() && !file_type.is_symlink())
+                .count() as u64
+        })
+        .unwrap_or_default();
+    let game_files = platforms.iter().map(|platform| platform.game_files).sum();
+    let game_bytes = platforms.iter().map(|platform| platform.bytes).sum();
+    platforms.sort_by(|left, right| {
+        right
+            .game_files
+            .cmp(&left.game_files)
+            .then_with(|| left.name.cmp(&right.name))
+    });
+
+    let emulator_root = root.join("RetroBat").join("emulators");
+    let mut emulators = Vec::new();
+    if let Ok(entries) = fs::read_dir(&emulator_root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if entry
+                .file_type()
+                .map(|file_type| file_type.is_dir() && !file_type.is_symlink())
+                .unwrap_or(false)
+            {
+                emulators.push(PublicEmulator {
+                    name: entry.file_name().to_string_lossy().into_owned(),
+                    path: path
+                        .strip_prefix(root)
+                        .unwrap_or(&path)
+                        .to_string_lossy()
+                        .replace('\\', "/"),
+                });
+            }
+        }
+    } else {
+        push_scan_warning(
+            &mut warnings,
+            format!(
+                "Emulator directory is unavailable: {}",
+                emulator_root.display()
+            ),
+        );
+    }
+    emulators.sort_by(|left, right| left.name.cmp(&right.name));
+
+    let retro_arch_core_count = fs::read_dir(root.join("RetroArch").join("cores"))
+        .ok()
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter_map(|entry| entry.file_type().ok())
+                .filter(|file_type| file_type.is_file())
+                .count() as u64
+        })
+        .unwrap_or_default();
+    let save_bytes = scan_directory_bytes(&root.join("RetroBat").join("saves"), &mut warnings)
+        .saturating_add(scan_directory_bytes(
+            &root.join("RetroArch").join("saves"),
+            &mut warnings,
+        ))
+        .saturating_add(scan_directory_bytes(
+            &root.join("RetroArch").join("states"),
+            &mut warnings,
+        ));
+
+    Ok(PublicDriveOverview {
+        root: root.to_string_lossy().into_owned(),
+        drive: drive_name(root),
+        total_bytes,
+        free_bytes,
+        used_bytes: total_bytes.saturating_sub(free_bytes),
+        rom_root: rom_root.to_string_lossy().into_owned(),
+        platform_count,
+        systems_with_games: platforms.len() as u64,
+        game_files,
+        game_bytes,
+        save_bytes,
+        emulator_count: emulators.len() as u64,
+        retro_arch_core_count,
+        emulators,
+        platforms,
+        warnings,
+        scanned_at_unix: unix_now(),
+    })
+}
+
+fn update_directory(root: &Path) -> PathBuf {
+    root.join("Launcher").join("data").join("updates")
+}
+
+fn write_update_state(root: &Path, status: &str, version: &str, detail: &str) {
+    let state = serde_json::json!({
+        "schemaVersion": 1,
+        "checkedAtUnix": unix_now(),
+        "status": status,
+        "version": version,
+        "detail": detail,
+    });
+    let data = root.join("Launcher").join("data");
+    let _ = fs::create_dir_all(&data);
+    let _ = fs::write(data.join("update-state.json"), state.to_string());
+}
+
+fn public_update(
+    manifest: Option<&UpdateManifest>,
+    status: &str,
+    checked_at_unix: Option<u64>,
+    detail: impl Into<String>,
+) -> PublicUpdate {
+    PublicUpdate {
+        current_version: env!("CARGO_PKG_VERSION"),
+        available_version: manifest.map(|manifest| manifest.version.clone()),
+        published_at: manifest.map(|manifest| manifest.published_at.clone()),
+        notes: manifest.map(|manifest| manifest.notes.clone()),
+        checked_at_unix,
+        status: status.to_string(),
+        detail: detail.into(),
+    }
+}
+
+fn cached_update(root: &Path) -> PublicUpdate {
+    let state_path = root.join("Launcher").join("data").join("update-state.json");
+    let state = fs::read(&state_path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+    let status = state
+        .as_ref()
+        .and_then(|value| value.get("status"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("not-checked");
+    let checked_at = state
+        .as_ref()
+        .and_then(|value| value.get("checkedAtUnix"))
+        .and_then(serde_json::Value::as_u64);
+    let detail = state
+        .as_ref()
+        .and_then(|value| value.get("detail"))
+        .and_then(serde_json::Value::as_str)
+        .map(|detail| match detail {
+            "还没有检查更新" => "No update check has run",
+            "发现可用更新" => "Update available",
+            "当前已经是最新版本" => "RetroDrive is up to date",
+            "已验证更新，启动器即将重启完成安装" => {
+                "Update verified. RetroDrive will restart to finish installation."
+            }
+            other => other,
+        })
+        .unwrap_or("No update check has run")
+        .to_string();
+    let manifest = fs::read(update_directory(root).join("latest.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<UpdateManifest>(&bytes).ok())
+        .filter(|manifest| manifest.verify().is_ok())
+        .filter(|manifest| {
+            manifest
+                .is_newer_than(env!("CARGO_PKG_VERSION"))
+                .unwrap_or(false)
+        });
+    let status = match status {
+        "available" if manifest.is_some() => "available",
+        "current" => "current",
+        "installing" => "installing",
+        "failed" | "check-failed" => "failed",
+        _ => "notChecked",
+    };
+    public_update(manifest.as_ref(), status, checked_at, detail)
+}
+
+fn curl_path() -> PathBuf {
+    std::env::var_os("WINDIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\Windows"))
+        .join("System32")
+        .join("curl.exe")
+}
+
+fn download_update(url: &str, destination: &Path, timeout_seconds: u32) -> Result<(), String> {
+    let curl = curl_path();
+    if !curl.is_file() {
+        return Err("Windows curl.exe is unavailable".to_string());
+    }
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("Unable to create update directory: {error}"))?;
+    }
+    let _ = fs::remove_file(destination);
+    let status = Command::new(curl)
+        .args([
+            "--fail",
+            "--location",
+            "--silent",
+            "--show-error",
+            "--connect-timeout",
+            "2",
+            "--max-time",
+        ])
+        .arg(timeout_seconds.to_string())
+        .args(["--proto", "=https", "--tlsv1.2", "--output"])
+        .arg(destination)
+        .arg(url)
+        .creation_flags(CREATE_NO_WINDOW)
+        .status()
+        .map_err(|error| format!("Unable to run the Windows download client: {error}"))?;
+    if !status.success() {
+        let _ = fs::remove_file(destination);
+        return Err(format!("Download failed with status {status}"));
+    }
+    Ok(())
+}
+
+fn fetch_update_manifest(root: &Path) -> Result<(UpdateManifest, PathBuf), String> {
+    let updates = update_directory(root);
+    fs::create_dir_all(&updates)
+        .map_err(|error| format!("Unable to create update directory: {error}"))?;
+    let manifest_path = updates.join("latest.json");
+    download_update(UPDATE_MANIFEST_URL, &manifest_path, 5)?;
+    let manifest: UpdateManifest = serde_json::from_slice(
+        &fs::read(&manifest_path)
+            .map_err(|error| format!("Unable to read the update manifest: {error}"))?,
+    )
+    .map_err(|error| format!("Unable to parse the update manifest: {error}"))?;
+    manifest.verify()?;
+    Ok((manifest, manifest_path))
+}
+
+fn install_verified_update(
+    root: &Path,
+    manifest: &UpdateManifest,
+    manifest_path: &Path,
+    app: &tauri::AppHandle,
+) -> Result<(), String> {
+    let updates = update_directory(root);
+    let archive = updates.join("package.zip");
+    download_update(&manifest.package.url, &archive, 120)?;
+    verify_package(&archive, manifest)?;
+    let updater = root.join("Launcher").join("Updater.exe");
+    if !updater.is_file() {
+        return Err("Launcher\\Updater.exe is missing".to_string());
+    }
+    let temporary_updater =
+        std::env::temp_dir().join(format!("RetroDriveUpdater-{}.exe", std::process::id()));
+    let _ = fs::remove_file(&temporary_updater);
+    fs::copy(&updater, &temporary_updater)
+        .map_err(|error| format!("Unable to prepare the update helper: {error}"))?;
+    Command::new(&temporary_updater)
+        .arg("--root")
+        .arg(root)
+        .arg("--manifest")
+        .arg(manifest_path)
+        .arg("--archive")
+        .arg(&archive)
+        .current_dir(root)
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
+        .map_err(|error| format!("Unable to start the update helper: {error}"))?;
+    write_update_state(
+        root,
+        "installing",
+        &manifest.version,
+        "Update verified. RetroDrive will restart to finish installation.",
+    );
+    app.exit(0);
+    Ok(())
+}
+
 #[tauri::command]
 fn get_launcher_state(state: tauri::State<'_, LauncherState>) -> PublicState {
     let active_entry = state
@@ -304,6 +813,100 @@ fn list_entries(state: tauri::State<'_, LauncherState>) -> Vec<PublicEntry> {
             primary: entry.primary,
         })
         .collect()
+}
+
+#[tauri::command]
+fn get_drive_overview(
+    state: tauri::State<'_, LauncherState>,
+) -> Result<PublicDriveOverview, String> {
+    let result = drive_overview(&state.root);
+    if let Err(error) = &result {
+        write_log(&state, &format!("drive-scan-failed detail={error}"));
+    }
+    result
+}
+
+#[tauri::command]
+fn get_update_status(state: tauri::State<'_, LauncherState>) -> PublicUpdate {
+    cached_update(&state.root)
+}
+
+#[tauri::command]
+fn check_for_update(state: tauri::State<'_, LauncherState>) -> Result<PublicUpdate, String> {
+    match fetch_update_manifest(&state.root) {
+        Ok((manifest, _manifest_path)) => {
+            let is_newer = manifest.is_newer_than(env!("CARGO_PKG_VERSION"))?;
+            let checked_at = unix_now();
+            if is_newer {
+                write_update_state(
+                    &state.root,
+                    "available",
+                    &manifest.version,
+                    "Update available",
+                );
+                write_log(
+                    &state,
+                    &format!("update-available version={}", manifest.version),
+                );
+                Ok(public_update(
+                    Some(&manifest),
+                    "available",
+                    Some(checked_at),
+                    "Update available",
+                ))
+            } else {
+                write_update_state(
+                    &state.root,
+                    "current",
+                    env!("CARGO_PKG_VERSION"),
+                    "RetroDrive is up to date",
+                );
+                write_log(&state, "update-current");
+                Ok(public_update(
+                    None,
+                    "current",
+                    Some(checked_at),
+                    "RetroDrive is up to date",
+                ))
+            }
+        }
+        Err(error) => {
+            write_update_state(
+                &state.root,
+                "check-failed",
+                env!("CARGO_PKG_VERSION"),
+                &error,
+            );
+            write_log(&state, &format!("update-check-failed detail={error}"));
+            Err(error)
+        }
+    }
+}
+
+#[tauri::command]
+fn install_update(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, LauncherState>,
+) -> Result<(), String> {
+    let manifest_path = update_directory(&state.root).join("latest.json");
+    let manifest: UpdateManifest = serde_json::from_slice(
+        &fs::read(&manifest_path).map_err(|_| "Check for updates in Settings first".to_string())?,
+    )
+    .map_err(|error| format!("Unable to parse the cached update manifest: {error}"))?;
+    manifest.verify()?;
+    if !manifest.is_newer_than(env!("CARGO_PKG_VERSION"))? {
+        return Err("RetroDrive is already up to date".to_string());
+    }
+    write_log(
+        &state,
+        &format!("update-install-start version={}", manifest.version),
+    );
+    if let Err(error) = install_verified_update(&state.root, &manifest, &manifest_path, &app) {
+        write_update_state(&state.root, "failed", &manifest.version, &error);
+        write_log(&state, &format!("update-install-failed detail={error}"));
+        return Err(error);
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -492,6 +1095,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_launcher_state,
             list_entries,
+            get_drive_overview,
+            get_update_status,
+            check_for_update,
+            install_update,
             list_skills,
             sync_skill,
             sync_all_skills,
@@ -546,5 +1153,52 @@ mod tests {
             entries: vec![entry],
         };
         assert!(validate_manifest(&manifest).is_err());
+    }
+
+    #[test]
+    fn drive_scan_counts_games_and_emulators_without_counting_metadata() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "retrodrive-overview-test-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(root.join("roms").join("nes")).expect("ROM directory should exist");
+        fs::create_dir_all(root.join("RetroBat").join("emulators").join("mame"))
+            .expect("emulator directory should exist");
+        fs::create_dir_all(root.join("RetroArch").join("cores"))
+            .expect("core directory should exist");
+        fs::create_dir_all(root.join("RetroArch").join("saves"))
+            .expect("save directory should exist");
+        fs::write(root.join("roms").join("nes").join("game.nes"), [0_u8; 12])
+            .expect("game should be written");
+        fs::write(
+            root.join("roms").join("nes").join("gamelist.xml"),
+            "metadata",
+        )
+        .expect("metadata should be written");
+        fs::write(
+            root.join("RetroArch").join("cores").join("nes.dll"),
+            [0_u8; 3],
+        )
+        .expect("core should be written");
+        fs::write(
+            root.join("RetroArch").join("saves").join("slot.sav"),
+            [0_u8; 5],
+        )
+        .expect("save should be written");
+
+        let overview = drive_overview(&root).expect("drive overview should be readable");
+
+        assert_eq!(overview.platform_count, 1);
+        assert_eq!(overview.systems_with_games, 1);
+        assert_eq!(overview.game_files, 1);
+        assert_eq!(overview.game_bytes, 12);
+        assert_eq!(overview.emulator_count, 1);
+        assert_eq!(overview.retro_arch_core_count, 1);
+        assert_eq!(overview.save_bytes, 5);
+        let _ = fs::remove_dir_all(root);
     }
 }
