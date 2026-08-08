@@ -5,8 +5,8 @@
       "id": "retrodrive-import-game",
       "displayName": "RetroDrive Game Import",
       "description": "Safely import a game file or content directory into a RetroDrive portable installation, with read-only detection, platform-specific installation, rollback-friendly staging, integrity checks, and RetroBat launch metadata. Use when the user asks to add, prepare, normalize, decrypt, install, or verify a game for RetroDrive.",
-      "sha256": "612e3241aa264f32d94c1742b5f58f01cc426ad7b1d966668195fa9f5b4f661e",
-      "bytes": 24889,
+      "sha256": "e69ad734319a06792f1fe656763668375be306819e3f0b545b191fccbc38e8d1",
+      "bytes": 25240,
       "files": [
         "SKILL.md",
         "agents/openai.yaml",
