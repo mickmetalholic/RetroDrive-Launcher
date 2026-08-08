@@ -1,17 +1,18 @@
 # Portable Update System
 
-RetroDrive Launcher checks the stable GitHub Release channel whenever `START.exe` runs. The check has a three-second hard timeout. Network failures are recorded locally and never prevent RetroDrive from starting.
+RetroDrive Launcher performs a background check against the stable GitHub Release channel after startup. The **Settings → Updates** page also provides a manual check. Network failures are recorded locally and never prevent RetroDrive from starting; a newer release is marked with a red dot beside the version.
 
 ## User Flow
 
-1. `START.exe` downloads `latest.json` from the latest GitHub Release.
-2. The manifest is verified with the Ed25519 public key compiled into `START.exe`.
-3. If the signed semantic version is newer, the user can choose **Yes** to update or **No** to continue immediately.
-4. The selected ZIP is downloaded and verified against the signed size and SHA-256 digest.
-5. A temporary copy of `Updater.exe` verifies everything again, extracts only the allowlisted launcher files, and replaces them after `START.exe` exits.
-6. The updater launches the new `START.exe`.
+1. The launcher starts and checks the stable release channel in the background.
+2. The user can open **Settings → Updates** and choose **Check for updates** at any time.
+3. The manifest is verified with the Ed25519 public key compiled into `START.exe`.
+4. If the signed semantic version is newer, the user can choose **Install update**.
+5. The selected ZIP is downloaded and verified against the signed size and SHA-256 digest.
+6. A temporary copy of `Updater.exe` verifies everything again, extracts only the allowlisted launcher files, and replaces them after `START.exe` exits.
+7. The updater launches the new `START.exe`.
 
-Offline startup and an unavailable GitHub service are both normal supported states.
+Offline startup and an unavailable GitHub service are both normal supported states. The home screen never blocks on the background request.
 
 ## Protected Boundary
 
@@ -32,7 +33,7 @@ The archive extractor rejects absolute paths, parent traversal, duplicate paths,
 
 ## Skill synchronization
 
-The launcher keeps its release-managed skill source under `Launcher/skills`. On the home screen, press **Y** (or choose the Skills panel) to inspect the signed skills included with the current release. A skill is copied to the local Codex directory only after pressing **A** on that skill; **X** synchronizes all skills. The default destination is `%USERPROFILE%\.codex\skills`, or `%CODEX_HOME%\skills` when `CODEX_HOME` is set.
+The launcher keeps its release-managed skill source under `Launcher/skills`. Open **Settings → Skills** to inspect the signed skills included with the current release. The current UI is read-only and does not copy skills into the local Codex directory. The default destination for future synchronization remains `%USERPROFILE%\.codex\skills`, or `%CODEX_HOME%\skills` when `CODEX_HOME` is set.
 
 The sync operation validates the manifest and deterministic tree hash, stages the new directory, refuses symlinks and untracked local changes, and keeps a backup under `%USERPROFILE%\.codex\retrodrive-skill-backups`. It never downloads code, executes a skill, or changes the Codex directory automatically during launcher startup. `Launcher/data/skill-sync-state.json` records only the last successfully synchronized source hash.
 

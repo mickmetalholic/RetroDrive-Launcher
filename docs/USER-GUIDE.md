@@ -3,19 +3,20 @@
 1. Connect the drive to a 64-bit Windows 10 22H2 or Windows 11 PC.
 2. Run `START.exe` from the drive root.
    It refreshes installed Nintendo 3DS `.m3u` shortcuts to the drive's current absolute path before opening RetroDrive.
-3. Use the D-pad or arrow keys to choose RetroBat or RetroArch.
-4. Press A or Enter to open the selected application.
+3. Use the D-pad or arrow keys to choose RetroBat, RetroArch, or **Settings**.
+4. Press A or Enter to open the selected application, or open the Settings page.
 5. Close the emulator frontend to return to RetroDrive.
 6. Close RetroDrive, then use Windows **Safely Remove Hardware** before unplugging the drive.
 
 ## Controls
 
-- D-pad / Arrow keys: move focus (up/down selects a Skill)
-- A / Enter: open
+- D-pad / Arrow keys: move focus (up/down browses Skills)
+- A / Enter: open or activate
 - B / Backspace / Escape: exit or go back
-- Y: open the Skills screen
-- Skills screen A: synchronize the selected skill
-- Skills screen X: synchronize all skills
+- S: open Settings
+- Settings keyboard ← / → or gamepad LB / RB: switch between Storage, Updates, and Skills
+- Settings Storage R or gamepad A: refresh the read-only drive scan
+- Settings Updates C or gamepad A: check for updates; I or gamepad X: install a verified update
 
 ## Runtime recovery
 
@@ -40,7 +41,11 @@ Installed Azahar games remain under `RetroBat\saves\3ds\azahar`. Keep their port
 
 ## Skills
 
-The Skills screen shows the validated skills included in the Launcher release. It does not install or update anything by itself. Press **A** to explicitly synchronize the selected skill, or **X** to synchronize all skills. The default Codex destination is `%USERPROFILE%\.codex\skills`; when `%CODEX_HOME%` is set, its `skills` directory is used instead. Local modifications and symbolic links are refused, and an existing synchronized copy is backed up before replacement.
+The Settings → Skills page shows the validated skills included in the Launcher release. It is currently a read-only catalog and does not install or update anything. The default Codex destination for future synchronization is `%USERPROFILE%\.codex\skills`; when `%CODEX_HOME%` is set, its `skills` directory is used instead.
+
+## Drive overview
+
+The Settings → Storage page reads the current portable drive rather than assuming a fixed drive letter. It reports free/used capacity, emulator directories under `RetroBat\emulators`, RetroArch core files, game files by platform, and the size of the main save/state directories. The scan is read-only and can be refreshed at any time.
 
 RetroBat and independent RetroArch data are intentionally isolated. Do not merge their save or state directories.
 

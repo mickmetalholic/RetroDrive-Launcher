@@ -1,17 +1,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-#[path = "../update_common.rs"]
-mod update_common;
-
 use fs2::available_space;
 use std::{
     fs::{self, OpenOptions},
-    os::windows::process::CommandExt,
     path::{Component, Path, PathBuf},
     process::Command,
-    time::{SystemTime, UNIX_EPOCH},
 };
-use update_common::{verify_package, UpdateManifest, UPDATE_MANIFEST_URL};
 use windows::{
     core::PCWSTR,
     Win32::UI::WindowsAndMessaging::{
@@ -22,7 +16,6 @@ use winreg::{enums::*, RegKey};
 
 const MIN_FREE_BYTES: u64 = 75_015_860_429;
 const AZAHAR_PATH_MARKER: &str = "saves\\3ds\\azahar\\";
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 #[derive(Debug, Default)]
 struct M3uRewriteSummary {
@@ -154,158 +147,6 @@ fn require_write_access(root: &Path) -> Result<(), String> {
         .map_err(|error| format!("Launcher data is not writable: {error}"))?;
     fs::remove_file(&probe).map_err(|error| format!("Write probe cleanup failed: {error}"))?;
     Ok(())
-}
-
-fn update_state(root: &Path, status: &str, version: &str, detail: &str) {
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or_default();
-    let state = serde_json::json!({
-        "schemaVersion": 1,
-        "checkedAtUnix": timestamp,
-        "status": status,
-        "version": version,
-        "detail": detail,
-    });
-    let _ = fs::write(
-        root.join("Launcher").join("data").join("update-state.json"),
-        state.to_string(),
-    );
-}
-
-fn curl_path() -> PathBuf {
-    std::env::var_os("WINDIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(r"C:\Windows"))
-        .join("System32")
-        .join("curl.exe")
-}
-
-fn download(url: &str, destination: &Path, timeout_seconds: u32) -> Result<(), String> {
-    let curl = curl_path();
-    if !curl.is_file() {
-        return Err("Windows curl.exe is unavailable".to_string());
-    }
-    if let Some(parent) = destination.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("Unable to create update directory: {error}"))?;
-    }
-    let _ = fs::remove_file(destination);
-    let status = Command::new(curl)
-        .args([
-            "--fail",
-            "--location",
-            "--silent",
-            "--show-error",
-            "--connect-timeout",
-            "2",
-            "--max-time",
-        ])
-        .arg(timeout_seconds.to_string())
-        .args(["--proto", "=https", "--tlsv1.2", "--output"])
-        .arg(destination)
-        .arg(url)
-        .creation_flags(CREATE_NO_WINDOW)
-        .status()
-        .map_err(|error| format!("Unable to run the Windows download client: {error}"))?;
-    if !status.success() {
-        let _ = fs::remove_file(destination);
-        return Err(format!("Download failed with status {status}"));
-    }
-    Ok(())
-}
-
-fn install_update(
-    root: &Path,
-    manifest: &UpdateManifest,
-    manifest_path: &Path,
-) -> Result<(), String> {
-    let updates = root.join("Launcher").join("data").join("updates");
-    let archive = updates.join("package.zip");
-    download(&manifest.package.url, &archive, 120)?;
-    verify_package(&archive, manifest)?;
-    let updater = root.join("Launcher").join("Updater.exe");
-    if !updater.is_file() {
-        return Err("Launcher\\Updater.exe is missing".to_string());
-    }
-    let temporary_updater = std::env::temp_dir().join("RetroDriveUpdater.exe");
-    fs::copy(&updater, &temporary_updater)
-        .map_err(|error| format!("Unable to prepare the update helper: {error}"))?;
-    Command::new(&temporary_updater)
-        .arg("--root")
-        .arg(root)
-        .arg("--manifest")
-        .arg(manifest_path)
-        .arg("--archive")
-        .arg(&archive)
-        .current_dir(root)
-        .creation_flags(CREATE_NO_WINDOW)
-        .spawn()
-        .map_err(|error| format!("Unable to start the update helper: {error}"))?;
-    update_state(
-        root,
-        "installing",
-        &manifest.version,
-        "A verified update is ready to install",
-    );
-    Ok(())
-}
-
-fn check_for_update(root: &Path) -> Result<bool, String> {
-    if std::env::var("RETRODRIVE_SKIP_UPDATE").as_deref() == Ok("1") {
-        return Ok(false);
-    }
-    let updates = root.join("Launcher").join("data").join("updates");
-    fs::create_dir_all(&updates)
-        .map_err(|error| format!("Unable to create update directory: {error}"))?;
-    let manifest_path = updates.join("latest.json");
-    download(UPDATE_MANIFEST_URL, &manifest_path, 3)?;
-    let manifest: UpdateManifest = serde_json::from_slice(
-        &fs::read(&manifest_path)
-            .map_err(|error| format!("Unable to read the update manifest: {error}"))?,
-    )
-    .map_err(|error| format!("Unable to parse the update manifest: {error}"))?;
-    manifest.verify()?;
-    if !manifest.is_newer_than(env!("CARGO_PKG_VERSION"))? {
-        update_state(
-            root,
-            "current",
-            env!("CARGO_PKG_VERSION"),
-            "No newer release is available",
-        );
-        return Ok(false);
-    }
-    let answer = message(
-        &format!(
-            "RetroDrive {} is available. The installed version is {}.\n\nInstall the verified update now? Choosing No continues normally.",
-            manifest.version,
-            env!("CARGO_PKG_VERSION")
-        ),
-        MB_YESNO | MB_ICONWARNING,
-    );
-    if answer != IDYES.0 {
-        update_state(
-            root,
-            "available",
-            &manifest.version,
-            "The update was postponed",
-        );
-        return Ok(false);
-    }
-    match install_update(root, &manifest, &manifest_path) {
-        Ok(()) => Ok(true),
-        Err(error) => {
-            update_state(root, "failed", &manifest.version, &error);
-            message(
-                &format!(
-                    "The update could not be prepared. RetroDrive will continue with the installed version.\n\n{error}"
-                ),
-                MB_OK | MB_ICONWARNING,
-            );
-            Ok(false)
-        }
-    }
 }
 
 fn collect_m3u_files(directory: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
@@ -504,11 +345,6 @@ fn main() {
         fail(
             "Microsoft Edge WebView2 Runtime is unavailable. See Launcher\\release\\USER-GUIDE.md.",
         );
-    }
-    match check_for_update(&root) {
-        Ok(true) => return,
-        Ok(false) => {}
-        Err(error) => update_state(&root, "check-failed", env!("CARGO_PKG_VERSION"), &error),
     }
     let result = Command::new(&launcher)
         .arg(&root)
