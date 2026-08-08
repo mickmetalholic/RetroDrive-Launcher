@@ -49,6 +49,11 @@ if (-not (Test-Path -LiteralPath $markerPath -PathType Leaf)) {
     throw 'Production build marker is missing. Run pnpm build:release first.'
 }
 $marker = Get-Content -Raw -LiteralPath $markerPath | ConvertFrom-Json
+$skillsDir = Join-Path $projectDir 'skills'
+& pnpm --dir $projectDir skills:validate
+if ($LASTEXITCODE -ne 0) {
+    throw 'Skill validation failed. Run pnpm skills:manifest after changing a skill.'
+}
 $sources = [ordered]@{
     'START.exe' = Join-Path $targetDir 'START.exe'
     'Launcher\RetroDriveLauncher.exe' = Join-Path $targetDir 'RetroDriveLauncher.exe'
@@ -56,6 +61,10 @@ $sources = [ordered]@{
     'Launcher\assets\icons\retrobat.png' = Join-Path $projectDir 'public\assets\icons\retrobat.png'
     'Launcher\assets\icons\retroarch.png' = Join-Path $projectDir 'public\assets\icons\retroarch.png'
     'Launcher\release\USER-GUIDE.md' = Join-Path $projectDir 'docs\USER-GUIDE.md'
+}
+foreach ($skillFile in (Get-ChildItem -LiteralPath $skillsDir -File -Recurse)) {
+    $relativeSkillPath = $skillFile.FullName.Substring($skillsDir.Length).TrimStart('\')
+    $sources[(Join-Path 'Launcher\skills' $relativeSkillPath)] = $skillFile.FullName
 }
 foreach ($entry in $sources.GetEnumerator()) {
     if (-not (Test-Path -LiteralPath $entry.Value -PathType Leaf)) {

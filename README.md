@@ -12,6 +12,7 @@ This repository contains source code, tests, build configuration, dependency loc
 - `RetroDriveLauncher.exe` is a Tauri 2 application with a Rust backend and vanilla TypeScript/HTML/CSS frontend.
 - `Updater.exe` is a native transactional updater that runs from a temporary copy so every launcher-owned executable can be replaced safely.
 - The launcher exposes only RetroBat and independent RetroArch.
+- `skills/` contains the versioned, validated Codex skills shipped with the launcher. The Skills screen can copy an approved skill into the local Codex skills directory after an explicit user action.
 - Runtime executables are resolved from manifest-approved paths below the attached RetroDrive root.
 - ROMs, BIOS files, firmware, encryption keys, saves, credentials, and emulator binaries must never be committed to this repository.
 
@@ -39,6 +40,7 @@ desktop workload.
 ```powershell
 pnpm install --frozen-lockfile
 pnpm check
+pnpm skills:manifest   # only after intentionally changing a skill
 pnpm build:release
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-portable.ps1 -Root D:\
 ```
@@ -54,6 +56,8 @@ recorded production hashes before it copies release binaries. It never copies
 ROMs, firmware, keys, saves, or emulator binaries into this repository.
 
 See [docs/UPDATES.md](docs/UPDATES.md) for the signed update protocol, strict file boundary, rollback behavior, and publishing procedure.
+
+See [skills/retrodrive-import-game/SKILL.md](skills/retrodrive-import-game/SKILL.md) for the first supported game-import workflow. Skills are validated with `pnpm skills:validate`; the generated `skills/skills-manifest.json` is part of the signed release package.
 
 ## Release
 

@@ -10,7 +10,9 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && vite build",
-    "check": "pnpm build && cargo test --manifest-path src-tauri/Cargo.toml",
+    "skills:validate": "node scripts/validate-skills.mjs",
+    "skills:manifest": "node scripts/validate-skills.mjs --write",
+    "check": "pnpm skills:validate && pnpm build && cargo test --manifest-path src-tauri/Cargo.toml",
     "build:release": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1",
     "release:portable": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/create-release.ps1",
     "release:patch": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release.ps1 -Bump patch",

@@ -17,6 +17,8 @@ use windows::Win32::{
     },
 };
 
+mod skill_sync;
+
 const LOG_LIMIT: u64 = 256 * 1024;
 
 #[derive(Clone, Debug, Deserialize)]
@@ -305,6 +307,44 @@ fn list_entries(state: tauri::State<'_, LauncherState>) -> Vec<PublicEntry> {
 }
 
 #[tauri::command]
+fn list_skills(
+    state: tauri::State<'_, LauncherState>,
+) -> Result<Vec<skill_sync::PublicSkill>, String> {
+    skill_sync::list(&state.root)
+}
+
+#[tauri::command]
+fn sync_skill(
+    skill_id: String,
+    state: tauri::State<'_, LauncherState>,
+) -> Result<skill_sync::PublicSkill, String> {
+    let result = skill_sync::sync(&state.root, &skill_id);
+    match &result {
+        Ok(skill) => write_log(
+            &state,
+            &format!("skill-sync id={} status={}", skill.id, skill.status),
+        ),
+        Err(error) => write_log(
+            &state,
+            &format!("skill-sync-failed id={skill_id} detail={error}"),
+        ),
+    }
+    result
+}
+
+#[tauri::command]
+fn sync_all_skills(
+    state: tauri::State<'_, LauncherState>,
+) -> Result<Vec<skill_sync::PublicSkill>, String> {
+    let result = skill_sync::sync_all(&state.root);
+    match &result {
+        Ok(skills) => write_log(&state, &format!("skill-sync-all count={}", skills.len())),
+        Err(error) => write_log(&state, &format!("skill-sync-all-failed detail={error}")),
+    }
+    result
+}
+
+#[tauri::command]
 async fn launch_entry(
     entry_id: String,
     app: tauri::AppHandle,
@@ -452,6 +492,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_launcher_state,
             list_entries,
+            list_skills,
+            sync_skill,
+            sync_all_skills,
             launch_entry,
             close_launcher
         ])
