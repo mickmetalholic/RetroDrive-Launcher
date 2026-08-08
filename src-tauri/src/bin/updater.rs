@@ -90,13 +90,20 @@ fn allowed_file(relative: &str) -> bool {
                 | "Launcher/release/USER-GUIDE.md"
                 | "Launcher/release/VERSION.json"
         )
+        || relative
+            .strip_prefix("Launcher/skills/")
+            .is_some_and(|skill_relative| !skill_relative.is_empty())
 }
 
 fn allowed_directory(relative: &str) -> bool {
+    let normalized = relative.trim_end_matches('/');
     matches!(
-        relative.trim_end_matches('/'),
+        normalized,
         "Launcher" | "Launcher/assets" | "Launcher/assets/icons" | "Launcher/release"
-    )
+    ) || normalized == "Launcher/skills"
+        || normalized
+            .strip_prefix("Launcher/skills/")
+            .is_some_and(|path| !path.is_empty())
 }
 
 fn extract_archive(archive: &Path, staging: &Path) -> Result<Vec<PathBuf>, String> {
@@ -374,6 +381,13 @@ mod tests {
         assert!(!allowed_file("launcher.json"));
         assert!(!allowed_file("RetroBat/RetroBat.exe"));
         assert!(!allowed_file("Launcher/data/update-state.json"));
+        assert!(allowed_file(
+            "Launcher/skills/retrodrive-import-game/SKILL.md"
+        ));
+        assert!(!allowed_file("Launcher/skills"));
+        assert!(allowed_directory(
+            "Launcher/skills/retrodrive-import-game/agents"
+        ));
     }
 
     #[test]

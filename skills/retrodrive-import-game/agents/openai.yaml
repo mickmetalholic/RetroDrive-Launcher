@@ -1,0 +1,4 @@
+interface:
+  display_name: "RetroDrive Game Import"
+  short_description: "Safely import and verify RetroDrive games"
+  default_prompt: "Use $retrodrive-import-game to safely import and verify this game into RetroDrive."

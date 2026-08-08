@@ -25,9 +25,16 @@ Launcher/assets/icons/retrobat.png
 Launcher/assets/icons/retroarch.png
 Launcher/release/USER-GUIDE.md
 Launcher/release/VERSION.json
+Launcher/skills/**
 ```
 
-The archive extractor rejects absolute paths, parent traversal, duplicate paths, and every file outside this allowlist. Releases never contain or modify RetroBat, RetroArch, emulators, ROMs, BIOS or firmware, encryption keys, saves, states, `launcher.json`, or runtime data.
+The archive extractor rejects absolute paths, parent traversal, duplicate paths, and every file outside this allowlist. `Launcher/skills/**` is the only extensible directory: it contains the validated skill tree and manifest shipped by the repository. The updater does not touch the local Codex skills directory. Releases never contain or modify RetroBat, RetroArch, emulators, ROMs, BIOS or firmware, encryption keys, saves, states, `launcher.json`, or runtime data.
+
+## Skill synchronization
+
+The launcher keeps its release-managed skill source under `Launcher/skills`. On the home screen, press **Y** (or choose the Skills panel) to inspect the signed skills included with the current release. A skill is copied to the local Codex directory only after pressing **A** on that skill; **X** synchronizes all skills. The default destination is `%USERPROFILE%\.codex\skills`, or `%CODEX_HOME%\skills` when `CODEX_HOME` is set.
+
+The sync operation validates the manifest and deterministic tree hash, stages the new directory, refuses symlinks and untracked local changes, and keeps a backup under `%USERPROFILE%\.codex\retrodrive-skill-backups`. It never downloads code, executes a skill, or changes the Codex directory automatically during launcher startup. `Launcher/data/skill-sync-state.json` records only the last successfully synchronized source hash.
 
 ## Recovery
 

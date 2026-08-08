@@ -26,8 +26,10 @@ $launcherDir = Join-Path $rootPath 'Launcher'
 $releaseDir = Join-Path $launcherDir 'release'
 $assetsDir = Join-Path $launcherDir 'assets\icons'
 $runtimeDir = Join-Path $launcherDir 'runtime'
+$skillsDir = Join-Path $launcherDir 'skills'
 $targetDir = Join-Path $PSScriptRoot '..\src-tauri\target\release'
 $projectDir = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
+$skillsSourceDir = Join-Path $projectDir 'skills'
 $materialsDir = (Resolve-Path -LiteralPath (Join-Path $projectDir '..\materials\packages\prerequisites\microsoft')).Path
 $launcherSource = Join-Path $targetDir 'RetroDriveLauncher.exe'
 $startSource = Join-Path $targetDir 'START.exe'
@@ -43,6 +45,10 @@ if (-not (Test-Path -LiteralPath (Join-Path $rootPath 'RetroArch\retroarch.exe')
 if (-not (Test-Path -LiteralPath $buildMarkerPath -PathType Leaf)) {
     throw 'Production build marker is missing. Run pnpm build:release before packaging.'
 }
+& pnpm --dir $projectDir skills:validate
+if ($LASTEXITCODE -ne 0) {
+    throw 'Skill validation failed. Run pnpm skills:manifest after changing a skill.'
+}
 $buildMarker = Get-Content -Raw -LiteralPath $buildMarkerPath | ConvertFrom-Json
 $launcherSourceHash = Get-Sha256 $launcherSource
 $startSourceHash = Get-Sha256 $startSource
@@ -57,13 +63,18 @@ if ($buildMarker.UpdaterSHA256 -ne $updaterSourceHash) {
     throw 'Updater.exe no longer matches the production build marker. Run pnpm build:release again.'
 }
 
-New-Item -ItemType Directory -Force -Path $launcherDir, $releaseDir, $assetsDir, $runtimeDir, (Join-Path $launcherDir 'data') | Out-Null
+New-Item -ItemType Directory -Force -Path $launcherDir, $releaseDir, $assetsDir, $runtimeDir, $skillsDir, (Join-Path $launcherDir 'data') | Out-Null
 Copy-Item -LiteralPath $launcherSource -Destination (Join-Path $launcherDir 'RetroDriveLauncher.exe') -Force
 Copy-Item -LiteralPath $startSource -Destination (Join-Path $rootPath 'START.exe') -Force
 Copy-Item -LiteralPath $updaterSource -Destination (Join-Path $launcherDir 'Updater.exe') -Force
 Copy-Item -LiteralPath (Join-Path $projectDir 'public\assets\icons\retrobat.png') -Destination $assetsDir -Force
 Copy-Item -LiteralPath (Join-Path $projectDir 'public\assets\icons\retroarch.png') -Destination $assetsDir -Force
 Copy-Item -LiteralPath (Join-Path $projectDir 'docs\USER-GUIDE.md') -Destination $releaseDir -Force
+if (Test-Path -LiteralPath $skillsDir) {
+    Remove-Item -LiteralPath $skillsDir -Recurse -Force
+}
+New-Item -ItemType Directory -Force -Path $skillsDir | Out-Null
+Get-ChildItem -LiteralPath $skillsSourceDir | Copy-Item -Destination $skillsDir -Recurse -Force
 
 $packageVersion = (Get-Content -Raw -LiteralPath (Join-Path $projectDir 'package.json') | ConvertFrom-Json).version
 $versionRecord = [ordered]@{
@@ -94,9 +105,10 @@ $files = @(
     (Join-Path $launcherDir 'Updater.exe'),
     (Join-Path $rootPath 'launcher.json'),
     (Join-Path $assetsDir 'retrobat.png'),
-    (Join-Path $assetsDir 'retroarch.png')
+    (Join-Path $assetsDir 'retroarch.png'),
     (Join-Path $releaseDir 'VERSION.json')
 )
+$files += Get-ChildItem -LiteralPath $skillsDir -File -Recurse | ForEach-Object FullName
 $files += $runtimeFiles | ForEach-Object { Join-Path $runtimeDir $_ }
 $hashes = $files | ForEach-Object {
     [pscustomobject]@{
@@ -117,14 +129,15 @@ $gitStatus = @(& git -C $projectDir status --porcelain)
 if ($LASTEXITCODE -ne 0) {
     throw 'Unable to read the Launcher Git working-tree status.'
 }
-$gitTag = (& git -C $projectDir describe --tags --exact-match HEAD 2>$null)
+$gitTag = (& git -C $projectDir tag --points-at HEAD | Select-Object -First 1)
 if ($LASTEXITCODE -ne 0) {
-    $gitTag = $null
+    throw 'Unable to resolve the Launcher Git tag.'
 }
+$gitTag = if ($gitTag) { $gitTag.Trim() } else { $null }
 $provenance = [ordered]@{
     SchemaVersion = 1
     GitCommit = $gitCommit
-    GitTag = if ($gitTag) { $gitTag.Trim() } else { $null }
+    GitTag = $gitTag
     GitClean = ($gitStatus.Count -eq 0)
     RustToolchain = '1.97.1'
     NodeEngine = '24.x'
@@ -141,7 +154,5 @@ $provenancePath = Join-Path $releaseDir 'BUILD-PROVENANCE.json'
 [System.IO.File]::WriteAllText($provenancePath, $provenanceJson, [System.Text.UTF8Encoding]::new($false))
 
 Write-Output "Portable launcher copied to $rootPath"
-# `git describe --exact-match` is expected to return non-zero for untagged
-# deployment commits. Do not leak that probe status to callers after packaging
-# has completed successfully.
+# Do not leak a successful packaging operation's Git probe status to callers.
 $global:LASTEXITCODE = 0

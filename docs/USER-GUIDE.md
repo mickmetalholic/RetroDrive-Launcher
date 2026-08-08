@@ -10,9 +10,12 @@
 
 ## Controls
 
-- D-pad / Arrow keys: move focus
+- D-pad / Arrow keys: move focus (up/down selects a Skill)
 - A / Enter: open
 - B / Backspace / Escape: exit or go back
+- Y: open the Skills screen
+- Skills screen A: synchronize the selected skill
+- Skills screen X: synchronize all skills
 
 ## Runtime recovery
 
@@ -35,9 +38,13 @@ Installed Azahar games remain under `RetroBat\saves\3ds\azahar`. Keep their port
 - Independent RetroArch states: `RetroArch\states`
 - Launcher data and logs: `Launcher\data`
 
+## Skills
+
+The Skills screen shows the validated skills included in the Launcher release. It does not install or update anything by itself. Press **A** to explicitly synchronize the selected skill, or **X** to synchronize all skills. The default Codex destination is `%USERPROFILE%\.codex\skills`; when `%CODEX_HOME%` is set, its `skills` directory is used instead. Local modifications and symbolic links are refused, and an existing synchronized copy is backed up before replacement.
+
 RetroBat and independent RetroArch data are intentionally isolated. Do not merge their save or state directories.
 
 ## Verification files
 
-- `Launcher\release\BINARY-HASHES.json`: launcher, manifest, icon, and runtime hashes
+- `Launcher\release\BINARY-HASHES.json`: launcher, skill, manifest, icon, and runtime hashes
 - `Launcher\release\LIBRARY.csv`: game-library path, size, and SHA-256 inventory
