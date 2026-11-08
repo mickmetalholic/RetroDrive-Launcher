@@ -19,7 +19,7 @@ use windows::Win32::{
     },
 };
 
-mod skill_sync;
+mod drive_skills;
 #[path = "update_common.rs"]
 mod update_common;
 
@@ -912,39 +912,8 @@ fn install_update(
 #[tauri::command]
 fn list_skills(
     state: tauri::State<'_, LauncherState>,
-) -> Result<Vec<skill_sync::PublicSkill>, String> {
-    skill_sync::list(&state.root)
-}
-
-#[tauri::command]
-fn sync_skill(
-    skill_id: String,
-    state: tauri::State<'_, LauncherState>,
-) -> Result<skill_sync::PublicSkill, String> {
-    let result = skill_sync::sync(&state.root, &skill_id);
-    match &result {
-        Ok(skill) => write_log(
-            &state,
-            &format!("skill-sync id={} status={}", skill.id, skill.status),
-        ),
-        Err(error) => write_log(
-            &state,
-            &format!("skill-sync-failed id={skill_id} detail={error}"),
-        ),
-    }
-    result
-}
-
-#[tauri::command]
-fn sync_all_skills(
-    state: tauri::State<'_, LauncherState>,
-) -> Result<Vec<skill_sync::PublicSkill>, String> {
-    let result = skill_sync::sync_all(&state.root);
-    match &result {
-        Ok(skills) => write_log(&state, &format!("skill-sync-all count={}", skills.len())),
-        Err(error) => write_log(&state, &format!("skill-sync-all-failed detail={error}")),
-    }
-    result
+) -> Result<Vec<drive_skills::PublicSkill>, String> {
+    drive_skills::list(&state.root)
 }
 
 #[tauri::command]
@@ -1092,6 +1061,19 @@ pub fn run() {
             }
         }))
         .manage(state)
+        .setup(|app| {
+            let state = app.state::<LauncherState>();
+            // Older updaters deliver Launcher/skills. Deploy from that validated
+            // source after the updated launcher starts, without changing Codex home.
+            match drive_skills::install_bundled(&state.root) {
+                Ok(skills) => write_log(
+                    &state,
+                    &format!("drive-skills-ready count={}", skills.len()),
+                ),
+                Err(error) => write_log(&state, &format!("drive-skills-failed detail={error}")),
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             get_launcher_state,
             list_entries,
@@ -1100,8 +1082,6 @@ pub fn run() {
             check_for_update,
             install_update,
             list_skills,
-            sync_skill,
-            sync_all_skills,
             launch_entry,
             close_launcher
         ])

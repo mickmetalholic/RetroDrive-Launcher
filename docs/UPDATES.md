@@ -31,11 +31,13 @@ Launcher/skills/**
 
 The archive extractor rejects absolute paths, parent traversal, duplicate paths, and every file outside this allowlist. `Launcher/skills/**` is the only extensible directory: it contains the validated skill tree and manifest shipped by the repository. The updater does not touch the local Codex skills directory. Releases never contain or modify RetroBat, RetroArch, emulators, ROMs, BIOS or firmware, encryption keys, saves, states, `launcher.json`, or runtime data.
 
-## Skill synchronization
+## Drive-local skill installation
 
-The launcher keeps its release-managed skill source under `Launcher/skills`. Open **Settings → Skills** to inspect the signed skills included with the current release. The current UI is read-only and does not copy skills into the local Codex directory. The default destination for future synchronization remains `%USERPROFILE%\.codex\skills`, or `%CODEX_HOME%\skills` when `CODEX_HOME` is set.
+The signed update package keeps its release-managed skill source under `Launcher/skills` so existing updaters can install new releases without widening their file allowlist. When the updated launcher starts, it validates that source and automatically installs each bundled skill into `.agents/skills/<skill-id>` at the portable drive root. The same installation runs on the first launch of a freshly packaged drive. Open the drive root as the Codex working folder to use these project-scoped skills.
 
-The sync operation validates the manifest and deterministic tree hash, stages the new directory, refuses symlinks and untracked local changes, and keeps a backup under `%USERPROFILE%\.codex\retrodrive-skill-backups`. It never downloads code, executes a skill, or changes the Codex directory automatically during launcher startup. `Launcher/data/skill-sync-state.json` records only the last successfully synchronized source hash.
+Installation validates the manifest and deterministic tree hash, stages the new directory under `Launcher/data/skill-staging`, refuses links and untracked drive changes, and keeps the previous managed version under `Launcher/data/skill-backups`. It only manages the bundled skill directories and preserves unrelated skills already in `.agents/skills`. `Launcher/data/drive-skills-state.json` records the last successfully installed source hashes; unchanged installations are left alone. If deployment fails, previous drive skills are restored and the error is logged without preventing the Launcher from opening.
+
+The Settings → Skills page displays the installed drive path and status. There are no host synchronization commands. The launcher never reads `CODEX_HOME` to locate skills, writes to the host PC's Codex skill directories, or executes a skill during installation. Legacy host-synchronized copies and their state files are left untouched.
 
 ## Recovery
 

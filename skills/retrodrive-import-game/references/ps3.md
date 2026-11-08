@@ -1,6 +1,8 @@
 # PlayStation 3 import
 
-Keep PS3 disc images in the shared ROM library when RPCS3 can read them directly. Install firmware, PKG content, and sequential updates into RPCS3-owned storage under `RetroBat\saves\ps3\rpcs3` or the configured RPCS3 data path.
+Package and update installation is manual; there is no scripted PS3 package installer in this skill.
+
+Keep standalone PS3 disc images in the shared ROM library when RPCS3 can read them directly. Use `-Platform ps3` for the helper's copy route. Install user-supplied firmware, PKG content, and sequential updates through RPCS3 into `RetroBat\saves\ps3\rpcs3` or its configured data path.
 
 Do not decrypt or rebuild an ISO speculatively. First perform a read-only RPCS3 readability check. Only extract, decrypt, or install an update when the emulator reports that it is required, and record the original image hash before doing so.
 

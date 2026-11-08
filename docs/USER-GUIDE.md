@@ -38,10 +38,13 @@ Installed Azahar games remain under `RetroBat\saves\3ds\azahar`. Keep their port
 - Independent RetroArch saves: `RetroArch\saves`
 - Independent RetroArch states: `RetroArch\states`
 - Launcher data and logs: `Launcher\data`
+- Drive-local Codex skills: `.agents\skills`
 
 ## Skills
 
-The Settings → Skills page shows the validated skills included in the Launcher release. It is currently a read-only catalog and does not install or update anything. The default Codex destination for future synchronization is `%USERPROFILE%\.codex\skills`; when `%CODEX_HOME%` is set, its `skills` directory is used instead.
+The launcher automatically installs bundled skills into `.agents\skills` at the drive root on first launch and after Launcher updates. For example, the game-import skill is stored at `.agents\skills\retrodrive-import-game\SKILL.md`. Open the drive root as your Codex working folder to use these project-scoped skills.
+
+The Settings → Skills page is a read-only view of the drive installation and its status. No skills or configuration are written to the host PC's Codex directories. Existing modified drive skills are preserved instead of overwritten; installation failures are recorded in `Launcher\data\launcher.log`. Previous managed versions are backed up under `Launcher\data\skill-backups`.
 
 ## Drive overview
 

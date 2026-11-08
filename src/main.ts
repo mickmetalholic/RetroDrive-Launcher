@@ -36,7 +36,6 @@ let driveBusy = false;
 let driveOverview: DriveOverview | null = null;
 let updateBusy = false;
 let updateInfo: UpdateInfo | null = null;
-let skillBusy = false;
 let inputLockedUntilNeutral = false;
 let launcherVersion = "0.2.2";
 type InputMethod = "keyboard" | "gamepad" | "mouse";
@@ -95,10 +94,10 @@ function formatName(value: string): string {
 
 function skillStatusLabel(status: SkillStatus): string {
   const labels: Record<SkillStatus, string> = {
-    notInstalled: "Not installed",
-    upToDate: "Up to date",
-    updateAvailable: "Update available",
-    localChanges: "Local changes",
+    notInstalled: "Not installed on drive",
+    upToDate: "Ready on drive",
+    updateAvailable: "Pending update",
+    localChanges: "Drive copy modified",
     error: "Unavailable",
   };
   return labels[status];
@@ -157,9 +156,7 @@ function settingsHints(): string {
     }
   } else if (skills.length > 0) {
     const browseHint = inputMethod === "gamepad" ? hint("D-PAD", "Browse skills") : hint("↑ ↓", "Browse skills");
-    const syncHint = inputMethod === "gamepad" ? hint("A", "Sync") : hint("ENTER", "Sync");
-    const syncAllHint = inputMethod === "gamepad" ? hint("X", "Sync all") : hint("X", "Sync all");
-    actionHint = `${browseHint}${syncHint}${syncAllHint}`;
+    actionHint = browseHint;
   }
   return `${tabHint}${actionHint}${backHint}`;
 }
@@ -346,7 +343,7 @@ function renderSettings(): void {
         ${settingsError ? `<p class="settings-error">${escapeHtml(settingsError)}</p>` : ""}
         ${content}
       </section>
-      <footer class="hints ${driveBusy || updateBusy || skillBusy ? "is-muted" : ""}">
+      <footer class="hints ${driveBusy || updateBusy ? "is-muted" : ""}">
         ${settingsHints()}<span class="footer-version">${updateIndicator()}RetroDrive v${escapeHtml(launcherVersion)}</span>
       </footer>
     </main>`;
@@ -468,17 +465,17 @@ function renderSkillsContent(): string {
   const rows = skills.length
     ? skills
         .map(
-          (skill, index) => `<button class="skill-row ${index === selectedSkillIndex ? "is-selected" : ""}" data-skill-index="${index}" type="button" ${skillBusy ? "disabled" : ""}><span class="skill-row-title">${escapeHtml(skill.displayName)}</span><span class="skill-row-status status-${skill.status}">${skillStatusLabel(skill.status)}</span></button>`,
+          (skill, index) => `<button class="skill-row ${index === selectedSkillIndex ? "is-selected" : ""}" data-skill-index="${index}" type="button"><span class="skill-row-title">${escapeHtml(skill.displayName)}</span><span class="skill-row-status status-${skill.status}">${skillStatusLabel(skill.status)}</span></button>`,
         )
         .join("")
     : `<p class="empty-state">No bundled Skills found.</p>`;
   const detail = current
-    ? `<div class="skill-detail-status status-${current.status}">${skillStatusLabel(current.status)}</div><p>${escapeHtml(current.description)}</p><div class="skill-path">Target: ${escapeHtml(current.destination)}</div>`
+    ? `<div class="skill-detail-status status-${current.status}">${skillStatusLabel(current.status)}</div><p>${escapeHtml(current.description)}</p><div class="skill-path">On drive: ${escapeHtml(current.destination)}</div><p>Open the drive root as your Codex working folder to use this skill. Launcher updates keep the drive copy current.</p>`
     : `<div class="skill-detail-status">Unavailable</div><p>Make sure Launcher/skills/skills-manifest.json is present.</p>`;
   return `
     <div class="skills-layout">
       <div class="skill-list">${rows}</div>
-      <aside class="setting-card skill-detail"><div class="card-topline"><span class="card-kicker">Codex Skill</span><span class="card-icon">✣</span></div><h2>${escapeHtml(current?.displayName ?? "Skills")}</h2>${detail}</aside>
+      <aside class="setting-card skill-detail"><div class="card-topline"><span class="card-kicker">Drive Skill</span><span class="card-icon">✣</span></div><h2>${escapeHtml(current?.displayName ?? "Skills")}</h2>${detail}</aside>
     </div>`;
 }
 
@@ -504,40 +501,6 @@ async function refreshSkills(): Promise<void> {
   }
   skills = await invoke<SkillSummary[]>("list_skills");
   selectedSkillIndex = Math.min(selectedSkillIndex, Math.max(0, skills.length - 1));
-}
-
-async function syncSelectedSkill(): Promise<void> {
-  if (mode !== "settings" || settingsSection !== "skills" || skillBusy || !isTauriRuntime) return;
-  const skill = skills[selectedSkillIndex];
-  if (!skill) return;
-  skillBusy = true;
-  settingsError = null;
-  renderSettings();
-  try {
-    await invoke<SkillSummary>("sync_skill", { skillId: skill.id });
-    await refreshSkills();
-  } catch (error) {
-    settingsError = error instanceof Error ? error.message : String(error);
-  } finally {
-    skillBusy = false;
-    if (mode === "settings" && settingsSection === "skills") renderSettings();
-  }
-}
-
-async function syncAllSkills(): Promise<void> {
-  if (mode !== "settings" || settingsSection !== "skills" || skillBusy || !isTauriRuntime || skills.length === 0) return;
-  skillBusy = true;
-  settingsError = null;
-  renderSettings();
-  try {
-    skills = await invoke<SkillSummary[]>("sync_all_skills");
-    selectedSkillIndex = Math.min(selectedSkillIndex, Math.max(0, skills.length - 1));
-  } catch (error) {
-    settingsError = error instanceof Error ? error.message : String(error);
-  } finally {
-    skillBusy = false;
-    if (mode === "settings" && settingsSection === "skills") renderSettings();
-  }
 }
 
 async function refreshDriveOverview(): Promise<void> {
@@ -723,7 +686,6 @@ function confirmAction(): void {
   } else if (mode === "settings") {
     if (settingsSection === "overview") void refreshDriveOverview();
     else if (settingsSection === "updates") void checkForUpdate();
-    else if (settingsSection === "skills") void syncSelectedSkill();
   }
 }
 
@@ -731,7 +693,6 @@ function secondaryAction(): void {
   if (mode !== "settings" || updateBusy || driveBusy) return;
   if (settingsSection === "updates") void installUpdate();
   else if (settingsSection === "overview") void refreshDriveOverview();
-  else if (settingsSection === "skills") void syncAllSkills();
 }
 
 function backAction(): void {
@@ -771,7 +732,6 @@ window.addEventListener("keydown", (event) => {
     if (settingsSection === "overview" && (event.key === "r" || event.key === "R")) void refreshDriveOverview();
     if (settingsSection === "updates" && (event.key === "c" || event.key === "C")) void checkForUpdate();
     if (settingsSection === "updates" && (event.key === "i" || event.key === "I")) void installUpdate();
-    if (settingsSection === "skills" && (event.key === "x" || event.key === "X")) void syncAllSkills();
     if (event.key === "Backspace" || event.key === "Escape") backAction();
     return;
   }

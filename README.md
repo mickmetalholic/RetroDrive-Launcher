@@ -12,7 +12,7 @@ This repository contains source code, tests, build configuration, dependency loc
 - `RetroDriveLauncher.exe` is a Tauri 2 application with a Rust backend and vanilla TypeScript/HTML/CSS frontend.
 - `Updater.exe` is a native transactional updater that runs from a temporary copy so every launcher-owned executable can be replaced safely.
 - The launcher exposes RetroBat, independent RetroArch, and a Settings page with a read-only drive overview, automatic and manual signed update checks, and a bundled Skills catalog.
-- `skills/` contains the versioned, validated Codex skills shipped with the launcher. The Settings → Skills page provides a read-only view of the bundled skills.
+- `skills/` contains the versioned, validated Codex skills shipped with the launcher. On startup, including after an update, the launcher installs them into `.agents/skills` at the portable drive root. The Settings → Skills page shows their drive paths and status; it never installs skills into the host PC's Codex directories.
 - Runtime executables are resolved from manifest-approved paths below the attached RetroDrive root.
 - ROMs, BIOS files, firmware, encryption keys, saves, credentials, and emulator binaries must never be committed to this repository.
 
