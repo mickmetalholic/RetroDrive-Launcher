@@ -54,7 +54,6 @@ let inputLockedUntilNeutral = false;
 let launcherVersion = "0.2.2";
 type InputMethod = "keyboard" | "gamepad" | "mouse";
 let inputMethod: InputMethod = "keyboard";
-let animateHomeSelection = false;
 let animateScreenEnter = true;
 let animateSettingsPanel = false;
 let animateSettingsTab = false;
@@ -136,10 +135,8 @@ function homeItems(): HomeSelection[] {
 function setInputMethod(method: InputMethod): void {
   if (inputMethod === method) return;
   inputMethod = method;
-  const content = document.querySelector<HTMLElement>(".settings-content");
-  if (content) content.dataset.input = method;
-  const dialog = document.querySelector<HTMLDialogElement>(".restore-dialog");
-  if (dialog) dialog.dataset.input = method;
+  app.dataset.input = method;
+  if (method === "gamepad") focusSettingsAction();
   updateInputHints();
 }
 
@@ -233,7 +230,7 @@ function renderHome(): void {
             const failed = focused && mode === "error";
             return `
               <button
-                class="launch-tile ${focused ? "is-focused" : "is-idle"} ${focused && animateHomeSelection ? "is-selection-entering" : ""} ${launching ? "is-launching" : ""} ${failed ? "is-error" : ""}"
+                class="launch-tile ${focused ? "is-focused" : "is-idle"} ${launching ? "is-launching" : ""} ${failed ? "is-error" : ""}"
                 data-entry="${escapeHtml(entry.id)}"
                 type="button"
                 aria-label="${escapeHtml(entry.title)}"
@@ -250,7 +247,7 @@ function renderHome(): void {
           })
           .join("")}
         <button
-          class="launch-tile settings-tile ${selected === "settings" ? "is-focused" : "is-idle"} ${selected === "settings" && animateHomeSelection ? "is-selection-entering" : ""}"
+          class="launch-tile settings-tile ${selected === "settings" ? "is-focused" : "is-idle"}"
           data-home-settings
           type="button"
           aria-label="Settings"
@@ -297,11 +294,10 @@ function renderHome(): void {
       </footer>
     </main>`;
 
-  animateHomeSelection = false;
   animateScreenEnter = false;
 
   document.querySelectorAll<HTMLButtonElement>("[data-entry]").forEach((tile) => {
-    tile.addEventListener("mouseenter", () => {
+    tile.addEventListener("pointermove", () => {
       setInputMethod("mouse");
       if (mode === "home" || mode === "error") {
         const nextEntry = tile.dataset.entry as EntryId;
@@ -309,19 +305,17 @@ function renderHome(): void {
         selected = nextEntry;
         mode = "home";
         errorEntry = null;
-        animateHomeSelection = true;
         renderHome();
       }
     });
     tile.addEventListener("click", () => void launch(tile.dataset.entry as EntryId));
   });
   document.querySelectorAll<HTMLButtonElement>("[data-home-settings]").forEach((button) => {
-    button.addEventListener("mouseenter", () => {
+    button.addEventListener("pointermove", () => {
       setInputMethod("mouse");
       if (mode === "home") {
         if (selected === "settings") return;
         selected = "settings";
-        animateHomeSelection = true;
         renderHome();
       }
     });
@@ -357,7 +351,7 @@ function renderSettings(): void {
         <div class="brand">RetroDrive</div>
       </header>
       <nav class="settings-nav-bar ${animateSettingsTab ? "is-tab-changing" : ""}" data-active="${settingsSection}" style="--tab-index:${tabIndex}; --tab-count:${settingsSections.length}" aria-label="Settings sections">${nav}</nav>
-      <section class="settings-content ${animateSettingsPanel ? "is-section-entering" : ""}" data-section="${settingsSection}" data-input="${inputMethod}">
+      <section class="settings-content ${animateSettingsPanel ? "is-section-entering" : ""}" data-section="${settingsSection}">
         <h1 class="visually-hidden">${sectionTitles[settingsSection]}</h1>
         ${showingSamples ? `<p class="sample-label">Sample data</p>` : ""}
         ${pageError ? `<p class="settings-error">${escapeHtml(pageError)}</p>` : ""}
@@ -417,7 +411,15 @@ function renderSettings(): void {
     const controls = availableBackupControls();
     const previous = controls.find((control) => control.dataset.backupFocus === backupFocus);
     (previous ?? controls[0])?.focus({ preventScroll: true });
+  } else if (inputMethod === "gamepad") {
+    focusSettingsAction();
   }
+}
+
+function focusSettingsAction(): void {
+  if (mode !== "settings" || settingsSection === "backup") return;
+  const selector = settingsSection === "overview" ? "[data-refresh-drive]" : "[data-check-update]";
+  app.querySelector<HTMLButtonElement>(selector + ":enabled")?.focus({ preventScroll: true });
 }
 
 function focusedBackupControl(): HTMLButtonElement | null {
@@ -590,7 +592,7 @@ function renderBackupContent(): string {
         ${isTauriRuntime ? `<button class="secondary-button" data-open-restored data-backup-focus="open-restore" ${disabled(busy)}>Open restored files</button>` : ""}
       </div>` : ""}
     </section>
-    ${restoreSnapshot ? `<dialog class="restore-dialog setting-card" aria-labelledby="restore-title" aria-describedby="restore-description" data-input="${inputMethod}">
+    ${restoreSnapshot ? `<dialog class="restore-dialog setting-card" aria-labelledby="restore-title" aria-describedby="restore-description">
       <h2 id="restore-title">Restore this backup?</h2>
       <p class="restore-version"><strong>${escapeHtml(formatDate(Date.parse(restoreSnapshot.time) / 1000))}</strong> · ${escapeHtml(restoreSnapshot.id.slice(0, 8))}</p>
       <p id="restore-description">Restores to a separate folder.</p>
@@ -792,7 +794,6 @@ function moveHomeFocus(direction: number): void {
     selected = item;
     mode = "home";
     errorEntry = null;
-    animateHomeSelection = true;
     renderHome();
   }
 }
@@ -834,13 +835,11 @@ function backAction(): void {
   if (pendingRestoreId) {
     closeRestoreDialog();
   } else if (mode === "settings" || mode === "exit" || mode === "error") {
-    const wasSettings = mode === "settings";
     mode = "home";
     selected = "retrobat";
     errorEntry = null;
     animateScreenEnter = true;
     settingsError = null;
-    animateHomeSelection = wasSettings;
     renderHome();
   } else if (mode === "home") {
     mode = "exit";
