@@ -66,5 +66,16 @@ export interface ChildEndedEvent {
 }
 
 export type UiMode = "home" | "launching" | "error" | "exit" | "settings";
-export type SettingsSection = "overview" | "updates";
+export type SettingsSection = "overview" | "updates" | "backup";
 export type HomeSelection = EntryId | "settings";
+
+export interface BackupSnapshot {
+  id: string; time: string; complete: boolean; files: number; bytes: number; addedBytes: number;
+}
+export interface BackupStatus {
+  repository: string; busy: boolean; phase: string; detail: string;
+  snapshots: BackupSnapshot[];
+  filesDone: number; bytesDone: number; totalFiles: number; totalBytes: number;
+  snapshotId: string | null; restorePath: string | null;
+  lastSuccess: { snapshotId: string; time: string; files: number; bytes: number; addedBytes: number } | null;
+}

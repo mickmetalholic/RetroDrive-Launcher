@@ -6,7 +6,7 @@ use std::{
     os::windows::process::CommandExt,
     path::{Component, Path, PathBuf},
     process::Command,
-    sync::Mutex,
+    sync::{Arc, Mutex, OnceLock},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -18,7 +18,16 @@ use windows::Win32::{
         TH32CS_SNAPPROCESS,
     },
 };
+use windows::{
+    core::PWSTR,
+    Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+    },
+};
 
+mod backup;
+mod backup_policy;
 mod drive_skills;
 #[path = "update_common.rs"]
 mod update_common;
@@ -146,6 +155,8 @@ struct LauncherState {
     manifest: Manifest,
     active: Mutex<Option<(String, u32)>>,
     log_path: PathBuf,
+    maintenance: Mutex<()>,
+    backup: OnceLock<Result<Arc<backup::Manager>, String>>,
 }
 
 fn safe_relative(path: &str) -> Result<PathBuf, String> {
@@ -203,6 +214,63 @@ fn process_running(process_name: &str) -> Result<bool, String> {
                 break;
             }
             if unsafe { Process32NextW(snapshot, &mut entry) }.is_err() {
+                break;
+            }
+        }
+    }
+    let _ = unsafe { CloseHandle(snapshot) };
+    Ok(found)
+}
+
+fn running_portable_program(root: &Path) -> Result<Option<String>, String> {
+    let snapshot =
+        unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }.map_err(|e| e.to_string())?;
+    let mut entry = PROCESSENTRY32W {
+        dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+        ..Default::default()
+    };
+    let prefixes: Vec<_> = [root.join("RetroBat"), root.join("RetroArch")]
+        .iter()
+        .map(|p| {
+            format!(
+                "{}\\",
+                p.to_string_lossy()
+                    .trim_start_matches(r"\\?\")
+                    .to_ascii_lowercase()
+            )
+        })
+        .collect();
+    let mut found = None;
+    if unsafe { Process32FirstW(snapshot, &mut entry) }.is_ok() {
+        loop {
+            if let Ok(process) = unsafe {
+                OpenProcess(
+                    PROCESS_QUERY_LIMITED_INFORMATION,
+                    false,
+                    entry.th32ProcessID,
+                )
+            } {
+                let mut buffer = vec![0u16; 32768];
+                let mut length = buffer.len() as u32;
+                if unsafe {
+                    QueryFullProcessImageNameW(
+                        process,
+                        PROCESS_NAME_WIN32,
+                        PWSTR(buffer.as_mut_ptr()),
+                        &mut length,
+                    )
+                }
+                .is_ok()
+                {
+                    let image = String::from_utf16_lossy(&buffer[..length as usize]);
+                    let normalized = image.trim_start_matches(r"\\?\").to_ascii_lowercase();
+                    if prefixes.iter().any(|p| normalized.starts_with(p)) {
+                        found = Some(image);
+                    }
+                }
+                let _ = unsafe { CloseHandle(process) };
+            }
+            if found.is_some() || unsafe { Process32NextW(snapshot, &mut entry) }.is_err() {
                 break;
             }
         }
@@ -306,6 +374,8 @@ fn load_state() -> Result<LauncherState, String> {
         manifest,
         active: Mutex::new(None),
         log_path: data_dir.join("launcher.log"),
+        maintenance: Mutex::new(()),
+        backup: OnceLock::new(),
     })
 }
 
@@ -888,6 +958,11 @@ fn install_update(
     app: tauri::AppHandle,
     state: tauri::State<'_, LauncherState>,
 ) -> Result<(), String> {
+    let _maintenance = state
+        .maintenance
+        .lock()
+        .map_err(|_| "Launcher state unavailable")?;
+    ensure_no_backup(&state)?;
     let manifest_path = update_directory(&state.root).join("latest.json");
     let manifest: UpdateManifest = serde_json::from_slice(
         &fs::read(&manifest_path).map_err(|_| "Check for updates in Settings first".to_string())?,
@@ -909,12 +984,84 @@ fn install_update(
     Ok(())
 }
 
+fn backup_manager(state: &LauncherState) -> Result<Arc<backup::Manager>, String> {
+    state
+        .backup
+        .get_or_init(|| backup::Manager::new(&state.root))
+        .clone()
+}
+
+fn ensure_no_backup(state: &LauncherState) -> Result<(), String> {
+    if state
+        .backup
+        .get()
+        .and_then(|m| m.as_ref().ok())
+        .is_some_and(|m| m.is_busy())
+    {
+        return Err("Finish or cancel the backup operation first".into());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn get_backup_status(state: tauri::State<'_, LauncherState>) -> Result<backup::Status, String> {
+    Ok(backup_manager(&state)?.status())
+}
+
+#[tauri::command]
+fn backup_action(
+    action: String,
+    snapshot_id: Option<String>,
+    state: tauri::State<'_, LauncherState>,
+) -> Result<(), String> {
+    let _maintenance = state
+        .maintenance
+        .lock()
+        .map_err(|_| "Launcher state unavailable")?;
+    if state
+        .active
+        .lock()
+        .map_err(|_| "Launcher state unavailable")?
+        .is_some()
+    {
+        return Err("Close the game session before using backup".into());
+    }
+    if let Some(process) = running_portable_program(&state.root)? {
+        return Err(format!(
+            "Close this portable program before using backup: {process}"
+        ));
+    }
+    let manager = backup_manager(&state)?;
+    match action.as_str() {
+        "backup" => manager.backup(),
+        "history" => manager.history(),
+        "restore" => manager.restore(snapshot_id.ok_or("Select a snapshot")?),
+        _ => Err("Unknown backup action".into()),
+    }
+}
+
+#[tauri::command]
+fn cancel_backup(state: tauri::State<'_, LauncherState>) -> Result<(), String> {
+    backup_manager(&state)?.cancel();
+    Ok(())
+}
+
+#[tauri::command]
+fn open_restored_files(state: tauri::State<'_, LauncherState>) -> Result<(), String> {
+    backup_manager(&state)?.open_restored_files()
+}
+
 #[tauri::command]
 async fn launch_entry(
     entry_id: String,
     app: tauri::AppHandle,
     state: tauri::State<'_, LauncherState>,
 ) -> Result<(), String> {
+    let _maintenance = state
+        .maintenance
+        .lock()
+        .map_err(|_| "Launcher state unavailable")?;
+    ensure_no_backup(&state)?;
     {
         let active = state
             .active
@@ -1031,9 +1178,18 @@ async fn launch_entry(
 }
 
 #[tauri::command]
-fn close_launcher(app: tauri::AppHandle, state: tauri::State<'_, LauncherState>) {
+fn close_launcher(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, LauncherState>,
+) -> Result<(), String> {
+    let _maintenance = state
+        .maintenance
+        .lock()
+        .map_err(|_| "Launcher state unavailable")?;
+    ensure_no_backup(&state)?;
     write_log(&state, "launcher-exit");
     app.exit(0);
+    Ok(())
 }
 
 pub fn run() {
@@ -1067,6 +1223,16 @@ pub fn run() {
             }
             Ok(())
         })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if let Some(state) = window.try_state::<LauncherState>() {
+                    if ensure_no_backup(&state).is_err() {
+                        api.prevent_close();
+                        let _ = window.emit("backup-close-blocked", ());
+                    }
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             get_launcher_state,
             list_entries,
@@ -1074,6 +1240,10 @@ pub fn run() {
             get_update_status,
             check_for_update,
             install_update,
+            get_backup_status,
+            backup_action,
+            cancel_backup,
+            open_restored_files,
             launch_entry,
             close_launcher
         ])

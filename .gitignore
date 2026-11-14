@@ -11,6 +11,7 @@
 # Tauri bundles and local build artifacts
 /artifacts/
 /staging/
+/src-tauri/tools/
 *.pdb
 *.msi
 *.msix

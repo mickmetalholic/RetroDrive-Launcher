@@ -32,6 +32,8 @@ if ((Test-Path -LiteralPath (Join-Path $rustBin 'cargo.exe') -PathType Leaf) -an
 
 Push-Location $projectDir
 try {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'prepare-restic.ps1')
+    if ($LASTEXITCODE -ne 0) { throw 'Unable to prepare the verified backup engine.' }
     & pnpm tauri:build
     if ($LASTEXITCODE -ne 0) {
         throw "Tauri production build failed with exit code $LASTEXITCODE."
