@@ -65,22 +65,6 @@ export interface ChildEndedEvent {
   exitCode: number | null;
 }
 
-export type SkillStatus =
-  | "notInstalled"
-  | "upToDate"
-  | "updateAvailable"
-  | "localChanges"
-  | "error";
-
-export interface SkillSummary {
-  id: string;
-  displayName: string;
-  description: string;
-  status: SkillStatus;
-  sourceHash: string;
-  destination: string;
-}
-
 export type UiMode = "home" | "launching" | "error" | "exit" | "settings";
-export type SettingsSection = "overview" | "updates" | "skills";
+export type SettingsSection = "overview" | "updates";
 export type HomeSelection = EntryId | "settings";

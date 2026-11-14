@@ -9,8 +9,6 @@ import type {
   LauncherEntry,
   LauncherState,
   SettingsSection,
-  SkillStatus,
-  SkillSummary,
   UiMode,
   UpdateInfo,
 } from "./types";
@@ -25,11 +23,14 @@ const app = requireApplicationRoot();
 const isTauriRuntime = "__TAURI_INTERNALS__" in window;
 
 let entries: LauncherEntry[] = [];
-let skills: SkillSummary[] = [];
 let selected: HomeSelection = "retrobat";
-let selectedSkillIndex = 0;
 let mode: UiMode = "home";
 let settingsSection: SettingsSection = "overview";
+const sectionTitles: Record<SettingsSection, string> = {
+  overview: "Storage",
+  updates: "Updates",
+};
+const settingsSections = Object.keys(sectionTitles) as SettingsSection[];
 let errorEntry: EntryId | null = null;
 let settingsError: string | null = null;
 let driveBusy = false;
@@ -92,17 +93,6 @@ function formatName(value: string): string {
     .replace(/\b[a-z]/g, (character) => character.toUpperCase());
 }
 
-function skillStatusLabel(status: SkillStatus): string {
-  const labels: Record<SkillStatus, string> = {
-    notInstalled: "Not installed on drive",
-    upToDate: "Ready on drive",
-    updateAvailable: "Pending update",
-    localChanges: "Drive copy modified",
-    error: "Unavailable",
-  };
-  return labels[status];
-}
-
 function updateStatusLabel(status: UpdateInfo["status"]): string {
   const labels: Record<UpdateInfo["status"], string> = {
     notChecked: "Not checked",
@@ -154,9 +144,6 @@ function settingsHints(): string {
     if (updateInfo?.status === "available") {
       actionHint += inputMethod === "gamepad" ? hint("X", "Install") : inputMethod === "mouse" ? hint("CLICK", "Install") : hint("I", "Install");
     }
-  } else if (skills.length > 0) {
-    const browseHint = inputMethod === "gamepad" ? hint("D-PAD", "Browse skills") : hint("↑ ↓", "Browse skills");
-    actionHint = browseHint;
   }
   return `${tabHint}${actionHint}${backHint}`;
 }
@@ -304,41 +291,31 @@ function renderHome(): void {
         renderHome();
       }
     });
-    button.addEventListener("click", () => void openSettings());
+    button.addEventListener("click", () => openSettings());
   });
 }
 
 function renderSettings(): void {
-  const sectionTitles: Record<SettingsSection, string> = {
-    overview: "Storage",
-    updates: "Updates",
-    skills: "Skills",
-  };
-  const sections = Object.keys(sectionTitles) as SettingsSection[];
-  const sectionNumber = String(sections.indexOf(settingsSection) + 1).padStart(2, "0");
-  const nav = (Object.keys(sectionTitles) as SettingsSection[])
+  const tabIndex = settingsSections.indexOf(settingsSection);
+  const sectionNumber = String(tabIndex + 1).padStart(2, "0");
+  const nav = settingsSections
     .map(
       (section) =>
         `<button class="settings-nav ${settingsSection === section ? "is-active" : ""}" data-settings-section="${section}" type="button" aria-current="${settingsSection === section ? "page" : "false"}"><span class="tab-label">${sectionTitles[section]}</span></button>`,
     )
     .join("");
-  const content =
-    settingsSection === "overview"
-      ? renderOverviewContent()
-      : settingsSection === "updates"
-        ? renderUpdateContent()
-        : renderSkillsContent();
+  const content = settingsSection === "overview" ? renderOverviewContent() : renderUpdateContent();
 
   app.innerHTML = `
     <main class="shell settings-shell ${animateScreenEnter ? "is-screen-entering" : ""}" aria-label="RetroDrive settings">
       <header class="topbar">
         <div class="brand">RetroDrive</div>
       </header>
-      <nav class="settings-nav-bar ${animateSettingsTab ? "is-tab-changing" : ""}" data-active="${settingsSection}" aria-label="Settings sections">${nav}</nav>
+      <nav class="settings-nav-bar ${animateSettingsTab ? "is-tab-changing" : ""}" data-active="${settingsSection}" style="--tab-index:${tabIndex}; --tab-count:${settingsSections.length}" aria-label="Settings sections">${nav}</nav>
       <section class="settings-content ${animateSettingsPanel ? "is-section-entering" : ""}" data-section="${settingsSection}">
         <div class="settings-heading">
           <h1>${sectionTitles[settingsSection]}</h1>
-          <span class="section-index">${sectionNumber} / ${String(sections.length).padStart(2, "0")}</span>
+          <span class="section-index">${sectionNumber} / ${String(settingsSections.length).padStart(2, "0")}</span>
         </div>
         ${settingsError ? `<p class="settings-error">${escapeHtml(settingsError)}</p>` : ""}
         ${content}
@@ -355,7 +332,7 @@ function renderSettings(): void {
   document.querySelectorAll<HTMLButtonElement>("[data-settings-section]").forEach((button) => {
     button.addEventListener("click", () => {
       const section = button.dataset.settingsSection as SettingsSection;
-      void switchSettingsSection(section);
+      switchSettingsSection(section);
     });
   });
   document.querySelectorAll<HTMLButtonElement>("[data-refresh-drive]").forEach((button) => {
@@ -366,22 +343,6 @@ function renderSettings(): void {
   });
   document.querySelectorAll<HTMLButtonElement>("[data-install-update]").forEach((button) => {
     button.addEventListener("click", () => void installUpdate());
-  });
-  document.querySelectorAll<HTMLButtonElement>("[data-skill-index]").forEach((row) => {
-    row.addEventListener("mouseenter", () => {
-      setInputMethod("mouse");
-      const nextIndex = Number(row.dataset.skillIndex);
-      if (selectedSkillIndex === nextIndex) return;
-      selectedSkillIndex = nextIndex;
-      renderSettings();
-    });
-    row.addEventListener("click", () => {
-      setInputMethod("mouse");
-      const nextIndex = Number(row.dataset.skillIndex);
-      if (selectedSkillIndex === nextIndex) return;
-      selectedSkillIndex = nextIndex;
-      renderSettings();
-    });
   });
 }
 
@@ -460,25 +421,6 @@ function renderUpdateContent(): string {
     ${notes}`;
 }
 
-function renderSkillsContent(): string {
-  const current = skills[selectedSkillIndex];
-  const rows = skills.length
-    ? skills
-        .map(
-          (skill, index) => `<button class="skill-row ${index === selectedSkillIndex ? "is-selected" : ""}" data-skill-index="${index}" type="button"><span class="skill-row-title">${escapeHtml(skill.displayName)}</span><span class="skill-row-status status-${skill.status}">${skillStatusLabel(skill.status)}</span></button>`,
-        )
-        .join("")
-    : `<p class="empty-state">No bundled Skills found.</p>`;
-  const detail = current
-    ? `<div class="skill-detail-status status-${current.status}">${skillStatusLabel(current.status)}</div><p>${escapeHtml(current.description)}</p><div class="skill-path">On drive: ${escapeHtml(current.destination)}</div><p>Open the drive root as your Codex working folder to use this skill. Launcher updates keep the drive copy current.</p>`
-    : `<div class="skill-detail-status">Unavailable</div><p>Make sure Launcher/skills/skills-manifest.json is present.</p>`;
-  return `
-    <div class="skills-layout">
-      <div class="skill-list">${rows}</div>
-      <aside class="setting-card skill-detail"><div class="card-topline"><span class="card-kicker">Drive Skill</span><span class="card-icon">✣</span></div><h2>${escapeHtml(current?.displayName ?? "Skills")}</h2>${detail}</aside>
-    </div>`;
-}
-
 async function launch(id: EntryId): Promise<void> {
   if (mode === "launching") return;
   selected = id;
@@ -492,15 +434,6 @@ async function launch(id: EntryId): Promise<void> {
     errorEntry = id;
     renderHome();
   }
-}
-
-async function refreshSkills(): Promise<void> {
-  if (!isTauriRuntime) {
-    skills = [];
-    return;
-  }
-  skills = await invoke<SkillSummary[]>("list_skills");
-  selectedSkillIndex = Math.min(selectedSkillIndex, Math.max(0, skills.length - 1));
 }
 
 async function refreshDriveOverview(): Promise<void> {
@@ -597,7 +530,7 @@ async function installUpdate(): Promise<void> {
   }
 }
 
-async function openSettings(section: SettingsSection = "overview"): Promise<void> {
+function openSettings(section: SettingsSection = "overview"): void {
   if (mode === "launching" || mode === "exit") return;
   mode = "settings";
   selected = "settings";
@@ -609,21 +542,9 @@ async function openSettings(section: SettingsSection = "overview"): Promise<void
   renderSettings();
   if (section === "overview" && !driveOverview) void refreshDriveOverview();
   if (section === "updates") void loadUpdateStatus();
-  if (section === "skills") {
-    try {
-      await refreshSkills();
-    } catch (error) {
-      settingsError = error instanceof Error ? error.message : String(error);
-    }
-    if (mode === "settings" && settingsSection === "skills") {
-      animateSettingsPanel = true;
-      animateSettingsTab = true;
-      renderSettings();
-    }
-  }
 }
 
-async function switchSettingsSection(section: SettingsSection): Promise<void> {
+function switchSettingsSection(section: SettingsSection): void {
   if (section === settingsSection) return;
   settingsSection = section;
   settingsError = null;
@@ -631,18 +552,6 @@ async function switchSettingsSection(section: SettingsSection): Promise<void> {
   animateSettingsTab = true;
   renderSettings();
   if (section === "updates") void loadUpdateStatus();
-  if (section === "skills") {
-    try {
-      await refreshSkills();
-    } catch (error) {
-      settingsError = error instanceof Error ? error.message : String(error);
-    }
-    if (mode === "settings" && settingsSection === "skills") {
-      animateSettingsPanel = true;
-      animateSettingsTab = true;
-      renderSettings();
-    }
-  }
 }
 
 function moveHomeFocus(direction: number): void {
@@ -662,17 +571,10 @@ function moveHomeFocus(direction: number): void {
 
 function moveSettingsSection(direction: number): void {
   if (mode !== "settings") return;
-  const sections: SettingsSection[] = ["overview", "updates", "skills"];
-  const index = sections.indexOf(settingsSection);
-  const next = Math.max(0, Math.min(sections.length - 1, index + direction));
-  const section = sections[next];
-  if (section && section !== settingsSection) void switchSettingsSection(section);
-}
-
-function moveSkillFocus(direction: number): void {
-  if (mode !== "settings" || settingsSection !== "skills" || skills.length === 0) return;
-  selectedSkillIndex = Math.max(0, Math.min(skills.length - 1, selectedSkillIndex + direction));
-  renderSettings();
+  const index = settingsSections.indexOf(settingsSection);
+  const next = Math.max(0, Math.min(settingsSections.length - 1, index + direction));
+  const section = settingsSections[next];
+  if (section && section !== settingsSection) switchSettingsSection(section);
 }
 
 function confirmAction(): void {
@@ -681,7 +583,7 @@ function confirmAction(): void {
   } else if (mode === "error" && errorEntry) {
     void launch(errorEntry);
   } else if (mode === "home") {
-    if (selected === "settings") void openSettings();
+    if (selected === "settings") openSettings();
     else void launch(selected);
   } else if (mode === "settings") {
     if (settingsSection === "overview") void refreshDriveOverview();
@@ -719,15 +621,13 @@ window.addEventListener("keydown", (event) => {
   if (event.repeat) return;
   setInputMethod("keyboard");
   if ((event.key === "s" || event.key === "S") && mode === "home") {
-    void openSettings();
+    openSettings();
     return;
   }
   if (mode === "launching") return;
   if (mode === "settings") {
     if (event.key === "ArrowLeft") moveSettingsSection(-1);
     if (event.key === "ArrowRight") moveSettingsSection(1);
-    if (settingsSection === "skills" && event.key === "ArrowUp") moveSkillFocus(-1);
-    if (settingsSection === "skills" && event.key === "ArrowDown") moveSkillFocus(1);
     if (event.key === "Enter" || event.key === " ") confirmAction();
     if (settingsSection === "overview" && (event.key === "r" || event.key === "R")) void refreshDriveOverview();
     if (settingsSection === "updates" && (event.key === "c" || event.key === "C")) void checkForUpdate();
@@ -753,7 +653,6 @@ window.addEventListener("pointermove", () => setInputMethod("mouse"), { passive:
 interface PadMemory {
   buttons: boolean[];
   horizontal: number;
-  vertical: number;
   repeatAt: number;
 }
 
@@ -781,19 +680,12 @@ function pollGamepads(now: number): void {
     const memory = padMemory.get(pad.index) ?? {
       buttons: [],
       horizontal: 0,
-      vertical: 0,
       repeatAt: 0,
     };
     const horizontal =
       pad.buttons[14]?.pressed || (pad.axes[0] ?? 0) < -0.35
         ? -1
         : pad.buttons[15]?.pressed || (pad.axes[0] ?? 0) > 0.35
-          ? 1
-          : 0;
-    const vertical =
-      pad.buttons[12]?.pressed || (pad.axes[1] ?? 0) < -0.35
-        ? -1
-        : pad.buttons[13]?.pressed || (pad.axes[1] ?? 0) > 0.35
           ? 1
           : 0;
     if (
@@ -803,15 +695,6 @@ function pollGamepads(now: number): void {
     ) {
       moveHomeFocus(horizontal);
       memory.repeatAt = now + (horizontal === memory.horizontal ? 100 : 350);
-    }
-    if (
-      mode === "settings" &&
-      settingsSection === "skills" &&
-      vertical !== 0 &&
-      (vertical !== memory.vertical || now >= memory.repeatAt)
-    ) {
-      moveSkillFocus(vertical);
-      memory.repeatAt = now + (vertical === memory.vertical ? 100 : 350);
     }
     const pressedEdge = (index: number) =>
       Boolean(pad.buttons[index]?.pressed) && !Boolean(memory.buttons[index]);
@@ -829,7 +712,6 @@ function pollGamepads(now: number): void {
     }
     memory.buttons = pad.buttons.map((button) => button.pressed);
     memory.horizontal = horizontal;
-    memory.vertical = vertical;
     padMemory.set(pad.index, memory);
   }
   requestAnimationFrame(pollGamepads);

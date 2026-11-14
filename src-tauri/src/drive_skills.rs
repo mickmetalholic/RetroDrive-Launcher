@@ -10,17 +10,6 @@ use std::{
 const MAX_FILE_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_SKILL_BYTES: u64 = 128 * 1024 * 1024;
 
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PublicSkill {
-    pub id: String,
-    pub display_name: String,
-    pub description: String,
-    pub status: String,
-    pub source_hash: String,
-    pub destination: String,
-}
-
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SkillsManifest {
@@ -32,8 +21,6 @@ struct SkillsManifest {
 #[serde(rename_all = "camelCase")]
 struct SkillSpec {
     id: String,
-    display_name: String,
-    description: String,
     sha256: String,
     files: Vec<String>,
 }
@@ -357,44 +344,6 @@ fn save_install_state(root: &Path, state: &InstallState) -> Result<(), String> {
     fs::rename(&temporary, &path).map_err(|error| error.to_string())
 }
 
-fn skill_status(paths: &DrivePaths, state: &InstallState, spec: &SkillSpec) -> PublicSkill {
-    let destination = paths.skills.join(&spec.id);
-    let status = match fs::symlink_metadata(&destination) {
-        Ok(metadata) if is_link(&metadata) => "error".to_string(),
-        Ok(metadata) if metadata.is_dir() => match tree_hash(&destination) {
-            Ok((hash, _)) if hash == spec.sha256 => "upToDate".to_string(),
-            Ok((hash, _)) if state.skills.get(&spec.id) == Some(&hash) => {
-                "updateAvailable".to_string()
-            }
-            Ok(_) => "localChanges".to_string(),
-            Err(_) => "error".to_string(),
-        },
-        Ok(_) => "error".to_string(),
-        Err(_) => "notInstalled".to_string(),
-    };
-    PublicSkill {
-        id: spec.id.clone(),
-        display_name: spec.display_name.clone(),
-        description: spec.description.clone(),
-        status,
-        source_hash: spec.sha256.clone(),
-        destination: destination.to_string_lossy().into_owned(),
-    }
-}
-
-pub fn list(root: &Path) -> Result<Vec<PublicSkill>, String> {
-    let Some(manifest) = load_manifest(root)? else {
-        return Ok(Vec::new());
-    };
-    let paths = drive_paths(root)?;
-    let state = load_install_state(root)?;
-    Ok(manifest
-        .skills
-        .iter()
-        .map(|spec| skill_status(&paths, &state, spec))
-        .collect())
-}
-
 fn install_one(
     root: &Path,
     paths: &DrivePaths,
@@ -503,9 +452,9 @@ fn rollback_change(change: &InstallChange) -> Result<(), String> {
     Ok(())
 }
 
-pub fn install_bundled(root: &Path) -> Result<Vec<PublicSkill>, String> {
+pub fn install_bundled(root: &Path) -> Result<usize, String> {
     let Some(manifest) = load_manifest(root)? else {
-        return Ok(Vec::new());
+        return Ok(0);
     };
     let paths = drive_paths(root)?;
     let mut state = load_install_state(root)?;
@@ -548,11 +497,7 @@ pub fn install_bundled(root: &Path) -> Result<Vec<PublicSkill>, String> {
             "Unable to save drive skill state: {error}.{suffix}"
         ));
     }
-    Ok(manifest
-        .skills
-        .iter()
-        .map(|spec| skill_status(&paths, &state, spec))
-        .collect())
+    Ok(manifest.skills.len())
 }
 
 #[cfg(test)]
@@ -640,13 +585,11 @@ mod tests {
         let foreign = root.join(".agents/skills/personal/SKILL.md");
         fs::create_dir_all(foreign.parent().unwrap()).unwrap();
         fs::write(&foreign, b"personal skill").unwrap();
-        let skills = install_bundled(&root).unwrap();
+        assert_eq!(install_bundled(&root).unwrap(), 1);
         let destination = root.join(".agents/skills/retrodrive-import-game");
-        assert_eq!(PathBuf::from(&skills[0].destination), destination);
-        assert_eq!(skills[0].status, "upToDate");
         assert!(destination.join("SKILL.md").is_file());
         let modified = fs::metadata(state_path(&root)).unwrap().modified().unwrap();
-        assert_eq!(install_bundled(&root).unwrap()[0].status, "upToDate");
+        assert_eq!(install_bundled(&root).unwrap(), 1);
         assert_eq!(
             fs::metadata(state_path(&root)).unwrap().modified().unwrap(),
             modified
@@ -664,10 +607,8 @@ mod tests {
         fs::remove_file(source.join("references/xbox.md")).unwrap();
         fs::write(source.join("new.txt"), b"new version").unwrap();
         refresh_manifest(&root);
-        assert_eq!(list(&root).unwrap()[0].status, "updateAvailable");
-        let skill = install_bundled(&root).unwrap().remove(0);
-        assert_eq!(skill.status, "upToDate");
-        let destination = PathBuf::from(&skill.destination);
+        assert_eq!(install_bundled(&root).unwrap(), 1);
+        let destination = root.join(".agents/skills/retrodrive-import-game");
         assert!(!destination.join("references/xbox.md").exists());
         assert_eq!(
             fs::read(destination.join("new.txt")).unwrap(),
@@ -711,7 +652,6 @@ mod tests {
             .unwrap_err()
             .contains("Local changes"));
         assert_eq!(tree_hash(&destination).unwrap().0, before);
-        assert_eq!(list(&root).unwrap()[0].status, "localChanges");
         let _ = fs::remove_dir_all(root);
     }
 
@@ -740,7 +680,7 @@ mod tests {
     #[test]
     fn missing_bundle_does_not_create_drive_skill_directories() {
         let root = temp_root();
-        assert!(install_bundled(&root).unwrap().is_empty());
+        assert_eq!(install_bundled(&root).unwrap(), 0);
         assert!(!root.join(".agents").exists());
         assert!(!state_path(&root).exists());
         let _ = fs::remove_dir_all(root);

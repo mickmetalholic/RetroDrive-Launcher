@@ -37,7 +37,7 @@ The signed update package keeps its release-managed skill source under `Launcher
 
 Installation validates the manifest and deterministic tree hash, stages the new directory under `Launcher/data/skill-staging`, refuses links and untracked drive changes, and keeps the previous managed version under `Launcher/data/skill-backups`. It only manages the bundled skill directories and preserves unrelated skills already in `.agents/skills`. `Launcher/data/drive-skills-state.json` records the last successfully installed source hashes; unchanged installations are left alone. If deployment fails, previous drive skills are restored and the error is logged without preventing the Launcher from opening.
 
-The Settings → Skills page displays the installed drive path and status. There are no host synchronization commands. The launcher never reads `CODEX_HOME` to locate skills, writes to the host PC's Codex skill directories, or executes a skill during installation. Legacy host-synchronized copies and their state files are left untouched.
+The launcher installs skills on the portable drive. It leaves legacy host-synchronized copies and their state files untouched.
 
 ## Recovery
 

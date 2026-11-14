@@ -910,13 +910,6 @@ fn install_update(
 }
 
 #[tauri::command]
-fn list_skills(
-    state: tauri::State<'_, LauncherState>,
-) -> Result<Vec<drive_skills::PublicSkill>, String> {
-    drive_skills::list(&state.root)
-}
-
-#[tauri::command]
 async fn launch_entry(
     entry_id: String,
     app: tauri::AppHandle,
@@ -1066,9 +1059,9 @@ pub fn run() {
             // Older updaters deliver Launcher/skills. Deploy from that validated
             // source after the updated launcher starts, without changing Codex home.
             match drive_skills::install_bundled(&state.root) {
-                Ok(skills) => write_log(
+                Ok(count) => write_log(
                     &state,
-                    &format!("drive-skills-ready count={}", skills.len()),
+                    &format!("drive-skills-ready count={count}"),
                 ),
                 Err(error) => write_log(&state, &format!("drive-skills-failed detail={error}")),
             }
@@ -1081,7 +1074,6 @@ pub fn run() {
             get_update_status,
             check_for_update,
             install_update,
-            list_skills,
             launch_entry,
             close_launcher
         ])

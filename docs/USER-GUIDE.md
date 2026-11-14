@@ -10,11 +10,11 @@
 
 ## Controls
 
-- D-pad / Arrow keys: move focus (up/down browses Skills)
+- D-pad / Arrow keys: move focus
 - A / Enter: open or activate
 - B / Backspace / Escape: exit or go back
 - S: open Settings
-- Settings keyboard ← / → or gamepad LB / RB: switch between Storage, Updates, and Skills
+- Settings keyboard ← / → or gamepad LB / RB: switch between Storage and Updates
 - Settings Storage R or gamepad A: refresh the read-only drive scan
 - Settings Updates C or gamepad A: check for updates; I or gamepad X: install a verified update
 
@@ -44,7 +44,7 @@ Installed Azahar games remain under `RetroBat\saves\3ds\azahar`. Keep their port
 
 The launcher automatically installs bundled skills into `.agents\skills` at the drive root on first launch and after Launcher updates. For example, the game-import skill is stored at `.agents\skills\retrodrive-import-game\SKILL.md`. Open the drive root as your Codex working folder to use these project-scoped skills.
 
-The Settings → Skills page is a read-only view of the drive installation and its status. No skills or configuration are written to the host PC's Codex directories. Existing modified drive skills are preserved instead of overwritten; installation failures are recorded in `Launcher\data\launcher.log`. Previous managed versions are backed up under `Launcher\data\skill-backups`.
+The launcher keeps the installation on the portable drive. It preserves modified drive skills and records installation failures in `Launcher\data\launcher.log`. Previous managed versions are backed up under `Launcher\data\skill-backups`.
 
 ## Drive overview
 
