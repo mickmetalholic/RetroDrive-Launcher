@@ -21,7 +21,8 @@ Prepare games on the portable drive, preserve their sources, and report separate
 | --- | --- |
 | One unpacked PSVita game with `app/<TITLE_ID>/sce_sys/param.sfo` | Scripted Vita3K installation; read [psvita.md](references/psvita.md). |
 | Standalone Switch `.nsp` or `.xci` | Copy and hash-check under `roms/switch`; emulator installation and runtime compatibility are separate checks. |
-| PS3 disc image, package, or update | Read [ps3.md](references/ps3.md). The helper can copy an emulator-readable standalone image with `-Platform ps3`; package installation is manual. |
+| PS3 disc image, package, update, or installed game | Follow [ps3.md](references/ps3.md) for copying disc images, installing packages, or adding a RetroBat launch entry. |
+| Wii U game folder or installed Cemu game | Follow [wiiu.md](references/wiiu.md) for folder placement and RetroBat launch entries. |
 | Xbox or Xbox 360 image | Follow [xbox.md](references/xbox.md); conversion and emulator setup are manual. |
 | Multi-disc set or linked image (`.m3u`, `.cue`, `.gdi`, etc.) | Follow [multidisc.md](references/multidisc.md); the single-file helper rejects these inputs. |
 | Other standalone ROM | The helper's `generic` route copies to `roms/inbox` only. Arrange the final platform directory separately. |
