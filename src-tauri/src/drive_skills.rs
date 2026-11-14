@@ -2,24 +2,13 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
-    env, fs,
+    fs,
     path::{Component, Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
 
 const MAX_FILE_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_SKILL_BYTES: u64 = 128 * 1024 * 1024;
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PublicSkill {
-    pub id: String,
-    pub display_name: String,
-    pub description: String,
-    pub status: String,
-    pub source_hash: String,
-    pub destination: String,
-}
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -32,29 +21,59 @@ struct SkillsManifest {
 #[serde(rename_all = "camelCase")]
 struct SkillSpec {
     id: String,
-    display_name: String,
-    description: String,
     sha256: String,
     files: Vec<String>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct SyncState {
+struct InstallState {
     schema_version: u32,
     #[serde(default)]
     skills: HashMap<String, String>,
 }
 
-struct CodexPaths {
-    home: PathBuf,
+struct DrivePaths {
     skills: PathBuf,
+    backups: PathBuf,
+    staging: PathBuf,
 }
 
-struct SyncChange {
+struct InstallChange {
     destination: PathBuf,
     backup: Option<PathBuf>,
     installed: bool,
+}
+
+fn is_link(metadata: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    // Reparse points include directory junctions as well as symbolic links.
+    metadata.file_attributes() & 0x400 != 0
+}
+
+fn check_drive_path(root: &Path, path: &Path) -> Result<(), String> {
+    let relative = path
+        .strip_prefix(root)
+        .map_err(|_| format!("Skill path is outside the drive: {}", path.display()))?;
+    relative_string(relative)?;
+    let mut current = root.to_path_buf();
+    for component in relative.components() {
+        current.push(component);
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if is_link(&metadata) => {
+                return Err(format!(
+                    "Skill paths cannot use links: {}",
+                    current.display()
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(error) => {
+                return Err(format!("Unable to inspect {}: {error}", current.display()));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn safe_skill_id(value: &str) -> Result<(), String> {
@@ -103,10 +122,10 @@ fn collect_files(root: &Path, current: &Path, output: &mut Vec<String>) -> Resul
     entries.sort_by_key(|entry| entry.file_name());
     for entry in entries {
         let path = entry.path();
-        let file_type = fs::symlink_metadata(&path)
-            .map_err(|error| format!("Unable to inspect {}: {error}", path.display()))?
-            .file_type();
-        if file_type.is_symlink() {
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|error| format!("Unable to inspect {}: {error}", path.display()))?;
+        let file_type = metadata.file_type();
+        if is_link(&metadata) {
             return Err(format!(
                 "Symlinks are not allowed in skills: {}",
                 path.display()
@@ -168,10 +187,9 @@ fn copy_tree(source: &Path, destination: &Path) -> Result<(), String> {
     for entry in entries {
         let source_path = entry.path();
         let destination_path = destination.join(entry.file_name());
-        let file_type = fs::symlink_metadata(&source_path)
-            .map_err(|error| error.to_string())?
-            .file_type();
-        if file_type.is_symlink() {
+        let metadata = fs::symlink_metadata(&source_path).map_err(|error| error.to_string())?;
+        let file_type = metadata.file_type();
+        if is_link(&metadata) {
             return Err(format!(
                 "Symlinks are not allowed in skills: {}",
                 source_path.display()
@@ -203,10 +221,12 @@ fn source_root(root: &Path) -> PathBuf {
 
 fn load_manifest(root: &Path) -> Result<Option<SkillsManifest>, String> {
     let directory = source_root(root);
+    check_drive_path(root, &directory)?;
     if !directory.is_dir() {
         return Ok(None);
     }
     let manifest_path = directory.join("skills-manifest.json");
+    check_drive_path(root, &manifest_path)?;
     let manifest: SkillsManifest = serde_json::from_slice(
         &fs::read(&manifest_path)
             .map_err(|error| format!("Unable to read {}: {error}", manifest_path.display()))?,
@@ -228,6 +248,7 @@ fn load_manifest(root: &Path) -> Result<Option<SkillsManifest>, String> {
             return Err(format!("Invalid skill manifest entry: {}", spec.id));
         }
         let skill_path = directory.join(&spec.id);
+        check_drive_path(root, &skill_path)?;
         if !skill_path.is_dir() {
             return Err(format!(
                 "Skill directory is missing: {}",
@@ -268,111 +289,71 @@ fn load_manifest(root: &Path) -> Result<Option<SkillsManifest>, String> {
     Ok(Some(manifest))
 }
 
-fn codex_paths() -> Result<CodexPaths, String> {
-    let home = if let Some(value) = env::var_os("CODEX_HOME") {
-        PathBuf::from(value)
-    } else if let Some(value) = env::var_os("USERPROFILE") {
-        PathBuf::from(value).join(".codex")
-    } else {
-        return Err("Unable to resolve Codex home; set CODEX_HOME or USERPROFILE".into());
+fn drive_paths(root: &Path) -> Result<DrivePaths, String> {
+    let paths = DrivePaths {
+        skills: root.join(".agents").join("skills"),
+        backups: root.join("Launcher").join("data").join("skill-backups"),
+        staging: root.join("Launcher").join("data").join("skill-staging"),
     };
-    Ok(CodexPaths {
-        skills: home.join("skills"),
-        home,
-    })
+    for path in [&paths.skills, &paths.backups, &paths.staging] {
+        check_drive_path(root, path)?;
+    }
+    Ok(paths)
 }
 
 fn state_path(root: &Path) -> PathBuf {
     root.join("Launcher")
         .join("data")
-        .join("skill-sync-state.json")
+        .join("drive-skills-state.json")
 }
 
-fn load_sync_state(root: &Path) -> Result<SyncState, String> {
+fn load_install_state(root: &Path) -> Result<InstallState, String> {
     let path = state_path(root);
+    check_drive_path(root, &path)?;
     if !path.is_file() {
-        return Ok(SyncState {
+        return Ok(InstallState {
             schema_version: 1,
             skills: HashMap::new(),
         });
     }
-    let state: SyncState =
+    let state: InstallState =
         serde_json::from_slice(&fs::read(&path).map_err(|error| error.to_string())?)
-            .map_err(|error| format!("Invalid skill sync state: {error}"))?;
+            .map_err(|error| format!("Invalid drive skill state: {error}"))?;
     if state.schema_version != 1 {
         return Err(format!(
-            "Unsupported skill sync state schema: {}",
+            "Unsupported drive skill state schema: {}",
             state.schema_version
         ));
     }
     Ok(state)
 }
 
-fn save_sync_state(root: &Path, state: &SyncState) -> Result<(), String> {
+fn save_install_state(root: &Path, state: &InstallState) -> Result<(), String> {
     let path = state_path(root);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
     let temporary = path.with_extension("json.tmp");
+    check_drive_path(root, &path)?;
+    check_drive_path(root, &temporary)?;
     fs::write(
         &temporary,
         serde_json::to_vec_pretty(state).map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())?;
-    if path.exists() {
-        fs::remove_file(&path).map_err(|error| error.to_string())?;
-    }
     fs::rename(&temporary, &path).map_err(|error| error.to_string())
 }
 
-fn skill_status(paths: &CodexPaths, state: &SyncState, spec: &SkillSpec) -> PublicSkill {
-    let destination = paths.skills.join(&spec.id);
-    let status = match fs::symlink_metadata(&destination) {
-        Ok(metadata) if metadata.file_type().is_symlink() => "error".to_string(),
-        Ok(metadata) if metadata.is_dir() => match tree_hash(&destination) {
-            Ok((hash, _)) if hash == spec.sha256 => "upToDate".to_string(),
-            Ok((hash, _)) if state.skills.get(&spec.id) == Some(&hash) => {
-                "updateAvailable".to_string()
-            }
-            Ok(_) => "localChanges".to_string(),
-            Err(_) => "error".to_string(),
-        },
-        Ok(_) => "error".to_string(),
-        Err(_) => "notInstalled".to_string(),
-    };
-    PublicSkill {
-        id: spec.id.clone(),
-        display_name: spec.display_name.clone(),
-        description: spec.description.clone(),
-        status,
-        source_hash: spec.sha256.clone(),
-        destination: destination.to_string_lossy().into_owned(),
-    }
-}
-
-pub fn list(root: &Path) -> Result<Vec<PublicSkill>, String> {
-    let Some(manifest) = load_manifest(root)? else {
-        return Ok(Vec::new());
-    };
-    let paths = codex_paths()?;
-    let state = load_sync_state(root)?;
-    Ok(manifest
-        .skills
-        .iter()
-        .map(|spec| skill_status(&paths, &state, spec))
-        .collect())
-}
-
-fn sync_one(
+fn install_one(
     root: &Path,
-    paths: &CodexPaths,
-    state: &mut SyncState,
+    paths: &DrivePaths,
+    state: &mut InstallState,
     spec: &SkillSpec,
-) -> Result<SyncChange, String> {
+) -> Result<InstallChange, String> {
     let source = source_root(root).join(&spec.id);
     let destination = paths.skills.join(&spec.id);
     let current_hash = match fs::symlink_metadata(&destination) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
+        Ok(metadata) if is_link(&metadata) => {
             return Err(format!(
                 "Refusing to replace a symlink: {}",
                 destination.display()
@@ -385,7 +366,13 @@ fn sync_one(
                 destination.display()
             ))
         }
-        Err(_) => None,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(format!(
+                "Unable to inspect {}: {error}",
+                destination.display()
+            ))
+        }
     };
     if let Some(hash) = &current_hash {
         if hash != &spec.sha256 && state.skills.get(&spec.id) != Some(hash) {
@@ -396,36 +383,29 @@ fn sync_one(
         }
         if hash == &spec.sha256 {
             state.skills.insert(spec.id.clone(), spec.sha256.clone());
-            return Ok(SyncChange {
+            return Ok(InstallChange {
                 destination,
                 backup: None,
                 installed: false,
             });
         }
     }
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let stage = paths.staging.join(format!("{}-{timestamp}", spec.id));
+    check_drive_path(root, &destination)?;
+    check_drive_path(root, &stage)?;
     fs::create_dir_all(&paths.skills).map_err(|error| error.to_string())?;
-    let stage = paths.skills.join(format!(
-        ".{}.retrodrive-stage-{}",
-        spec.id,
-        std::process::id()
-    ));
-    if stage.exists() {
-        fs::remove_dir_all(&stage).map_err(|error| error.to_string())?;
-    }
     copy_tree(&source, &stage)?;
     let (staged_hash, _) = tree_hash(&stage)?;
     if staged_hash != spec.sha256 {
         let _ = fs::remove_dir_all(&stage);
         return Err(format!("Staged skill hash does not match: {}", spec.id));
     }
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or_default();
-    let backup = paths
-        .home
-        .join("retrodrive-skill-backups")
-        .join(format!("{}-{timestamp}", spec.id));
+    let backup = paths.backups.join(format!("{}-{timestamp}", spec.id));
+    check_drive_path(root, &backup)?;
     let had_destination = destination.exists();
     if had_destination {
         if let Some(parent) = backup.parent() {
@@ -442,14 +422,14 @@ fn sync_one(
         return Err(format!("Unable to install skill: {error}"));
     }
     state.skills.insert(spec.id.clone(), spec.sha256.clone());
-    Ok(SyncChange {
+    Ok(InstallChange {
         destination,
         backup: if had_destination { Some(backup) } else { None },
         installed: true,
     })
 }
 
-fn rollback_change(change: &SyncChange) -> Result<(), String> {
+fn rollback_change(change: &InstallChange) -> Result<(), String> {
     if !change.installed {
         return Ok(());
     }
@@ -472,37 +452,16 @@ fn rollback_change(change: &SyncChange) -> Result<(), String> {
     Ok(())
 }
 
-pub fn sync(root: &Path, id: &str) -> Result<PublicSkill, String> {
+pub fn install_bundled(root: &Path) -> Result<usize, String> {
     let Some(manifest) = load_manifest(root)? else {
-        return Err("The portable Launcher does not contain a skills manifest".into());
+        return Ok(0);
     };
-    let paths = codex_paths()?;
-    let mut state = load_sync_state(root)?;
-    let spec = manifest
-        .skills
-        .iter()
-        .find(|spec| spec.id == id)
-        .ok_or_else(|| format!("Unknown skill: {id}"))?;
-    let change = sync_one(root, &paths, &mut state, spec)?;
-    if let Err(error) = save_sync_state(root, &state) {
-        let rollback_error = rollback_change(&change).err();
-        let suffix = rollback_error
-            .map(|rollback| format!(" Rollback failed: {rollback}"))
-            .unwrap_or_default();
-        return Err(format!("Unable to save skill sync state: {error}.{suffix}"));
-    }
-    Ok(skill_status(&paths, &state, spec))
-}
-
-pub fn sync_all(root: &Path) -> Result<Vec<PublicSkill>, String> {
-    let Some(manifest) = load_manifest(root)? else {
-        return Err("The portable Launcher does not contain a skills manifest".into());
-    };
-    let paths = codex_paths()?;
-    let mut state = load_sync_state(root)?;
+    let paths = drive_paths(root)?;
+    let mut state = load_install_state(root)?;
+    let previous_state = state.clone();
     let mut changes = Vec::new();
     for spec in &manifest.skills {
-        match sync_one(root, &paths, &mut state, spec) {
+        match install_one(root, &paths, &mut state, spec) {
             Ok(change) => changes.push(change),
             Err(error) => {
                 let rollback_errors = changes
@@ -519,7 +478,11 @@ pub fn sync_all(root: &Path) -> Result<Vec<PublicSkill>, String> {
             }
         }
     }
-    if let Err(error) = save_sync_state(root, &state) {
+    if let Err(error) = if state == previous_state {
+        Ok(())
+    } else {
+        save_install_state(root, &state)
+    } {
         let rollback_errors = changes
             .iter()
             .rev()
@@ -530,19 +493,20 @@ pub fn sync_all(root: &Path) -> Result<Vec<PublicSkill>, String> {
         } else {
             format!(" Rollback errors: {}", rollback_errors.join("; "))
         };
-        return Err(format!("Unable to save skill sync state: {error}.{suffix}"));
+        return Err(format!(
+            "Unable to save drive skill state: {error}.{suffix}"
+        ));
     }
-    Ok(manifest
-        .skills
-        .iter()
-        .map(|spec| skill_status(&paths, &state, spec))
-        .collect())
+    Ok(manifest.skills.len())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::{
+        env,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     fn temp_root() -> PathBuf {
         let suffix = SystemTime::now()
@@ -552,6 +516,30 @@ mod tests {
         let root = env::temp_dir().join(format!("retrodrive-skill-test-{suffix}"));
         fs::create_dir_all(&root).unwrap();
         root
+    }
+
+    fn bundled_root() -> PathBuf {
+        let repository_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+        let root = temp_root();
+        copy_tree(&repository_root.join("skills"), &source_root(&root)).unwrap();
+        root
+    }
+
+    fn refresh_manifest(root: &Path) {
+        let path = source_root(root).join("skills-manifest.json");
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        for spec in manifest["skills"].as_array_mut().unwrap() {
+            let skill_path = source_root(root).join(spec["id"].as_str().unwrap());
+            let (hash, bytes) = tree_hash(&skill_path).unwrap();
+            let mut files = Vec::new();
+            collect_files(&skill_path, &skill_path, &mut files).unwrap();
+            files.sort();
+            spec["sha256"] = hash.into();
+            spec["bytes"] = bytes.into();
+            spec["files"] = serde_json::to_value(files).unwrap();
+        }
+        fs::write(path, serde_json::to_vec(&manifest).unwrap()).unwrap();
     }
 
     #[test]
@@ -592,37 +580,134 @@ mod tests {
     }
 
     #[test]
-    fn sync_stages_and_refuses_untracked_destination_changes() {
-        let repository_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
-        let portable_root = temp_root();
-        copy_tree(
-            &repository_root.join("skills"),
-            &portable_root.join("Launcher/skills"),
-        )
-        .unwrap();
-        let codex_home = temp_root();
-        let paths = CodexPaths {
-            skills: codex_home.join("skills"),
-            home: codex_home.clone(),
-        };
-        let manifest = load_manifest(&portable_root).unwrap().unwrap();
-        let spec = &manifest.skills[0];
-        let mut state = SyncState {
-            schema_version: 1,
-            skills: HashMap::new(),
-        };
-        sync_one(&portable_root, &paths, &mut state, spec).unwrap();
+    fn installs_to_drive_root_and_leaves_unchanged_installations_alone() {
+        let root = bundled_root();
+        let foreign = root.join(".agents/skills/personal/SKILL.md");
+        fs::create_dir_all(foreign.parent().unwrap()).unwrap();
+        fs::write(&foreign, b"personal skill").unwrap();
+        assert_eq!(install_bundled(&root).unwrap(), 1);
+        let destination = root.join(".agents/skills/retrodrive-import-game");
+        assert!(destination.join("SKILL.md").is_file());
+        let modified = fs::metadata(state_path(&root)).unwrap().modified().unwrap();
+        assert_eq!(install_bundled(&root).unwrap(), 1);
         assert_eq!(
-            tree_hash(&paths.skills.join(&spec.id)).unwrap().0,
-            spec.sha256
+            fs::metadata(state_path(&root)).unwrap().modified().unwrap(),
+            modified
         );
+        assert!(!drive_paths(&root).unwrap().backups.exists());
+        assert_eq!(fs::read(foreign).unwrap(), b"personal skill");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn upgrades_managed_skills_and_backs_up_removed_files() {
+        let root = bundled_root();
+        install_bundled(&root).unwrap();
+        let source = source_root(&root).join("retrodrive-import-game");
+        fs::remove_file(source.join("references/xbox.md")).unwrap();
+        fs::write(source.join("new.txt"), b"new version").unwrap();
+        refresh_manifest(&root);
+        assert_eq!(install_bundled(&root).unwrap(), 1);
+        let destination = root.join(".agents/skills/retrodrive-import-game");
+        assert!(!destination.join("references/xbox.md").exists());
+        assert_eq!(
+            fs::read(destination.join("new.txt")).unwrap(),
+            b"new version"
+        );
+        let backups = drive_paths(&root).unwrap().backups;
+        let backup = fs::read_dir(backups)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        assert!(backup.join("references/xbox.md").is_file());
+        assert_eq!(
+            tree_hash(&destination).unwrap().0,
+            load_manifest(&root).unwrap().unwrap().skills[0].sha256
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn refuses_modified_drive_skills_without_changing_them() {
+        let root = bundled_root();
+        let destination = root.join(".agents/skills/retrodrive-import-game");
+        fs::create_dir_all(&destination).unwrap();
+        fs::write(destination.join("SKILL.md"), b"user skill").unwrap();
+        assert!(install_bundled(&root)
+            .unwrap_err()
+            .contains("Local changes"));
+        assert_eq!(
+            fs::read(destination.join("SKILL.md")).unwrap(),
+            b"user skill"
+        );
+        assert!(!state_path(&root).exists());
+        // The same protection applies to a previously managed copy edited by its user.
+        fs::remove_dir_all(&destination).unwrap();
+        install_bundled(&root).unwrap();
+        fs::write(destination.join("local.txt"), b"local change").unwrap();
+        let before = tree_hash(&destination).unwrap().0;
+        assert!(install_bundled(&root)
+            .unwrap_err()
+            .contains("Local changes"));
+        assert_eq!(tree_hash(&destination).unwrap().0, before);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn restores_previous_drive_skill_if_saving_state_fails() {
+        let root = bundled_root();
+        install_bundled(&root).unwrap();
+        let destination = root.join(".agents/skills/retrodrive-import-game");
+        let before = tree_hash(&destination).unwrap().0;
+        let state_before = fs::read(state_path(&root)).unwrap();
         fs::write(
-            paths.skills.join(&spec.id).join("local.txt"),
-            b"local change",
+            source_root(&root).join("retrodrive-import-game/new.txt"),
+            b"new",
         )
         .unwrap();
-        assert!(sync_one(&portable_root, &paths, &mut state, spec).is_err());
-        let _ = fs::remove_dir_all(portable_root);
-        let _ = fs::remove_dir_all(codex_home);
+        refresh_manifest(&root);
+        fs::create_dir_all(state_path(&root).with_extension("json.tmp")).unwrap();
+        assert!(install_bundled(&root)
+            .unwrap_err()
+            .contains("Unable to save"));
+        assert_eq!(tree_hash(&destination).unwrap().0, before);
+        assert_eq!(fs::read(state_path(&root)).unwrap(), state_before);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn missing_bundle_does_not_create_drive_skill_directories() {
+        let root = temp_root();
+        assert_eq!(install_bundled(&root).unwrap(), 0);
+        assert!(!root.join(".agents").exists());
+        assert!(!state_path(&root).exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn refuses_junctions_that_redirect_drive_skills_outside_the_root() {
+        let root = bundled_root();
+        let outside = temp_root();
+        let link = root.join(".agents");
+        let output = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&outside)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(install_bundled(&root)
+            .unwrap_err()
+            .contains("cannot use links"));
+        assert_eq!(fs::read_dir(&outside).unwrap().count(), 0);
+        fs::remove_dir(link).unwrap();
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(outside);
     }
 }

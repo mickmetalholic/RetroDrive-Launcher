@@ -10,13 +10,14 @@
 
 ## Controls
 
-- D-pad / Arrow keys: move focus (up/down browses Skills)
+- D-pad / Arrow keys: move focus
 - A / Enter: open or activate
 - B / Backspace / Escape: exit or go back
 - S: open Settings
-- Settings keyboard ← / → or gamepad LB / RB: switch between Storage, Updates, and Skills
+- Settings keyboard ← / → or gamepad LB / RB: switch between Storage, Updates, and Backup
 - Settings Storage R or gamepad A: refresh the read-only drive scan
 - Settings Updates C or gamepad A: check for updates; I or gamepad X: install a verified update
+- Settings Backup D-pad or left stick: move focus. A opens a completed snapshot or activates the focused button. B returns from the restore dialog.
 
 ## Runtime recovery
 
@@ -38,14 +39,23 @@ Installed Azahar games remain under `RetroBat\saves\3ds\azahar`. Keep their port
 - Independent RetroArch saves: `RetroArch\saves`
 - Independent RetroArch states: `RetroArch\states`
 - Launcher data and logs: `Launcher\data`
+- Drive-local Codex skills: `.agents\skills`
 
 ## Skills
 
-The Settings → Skills page shows the validated skills included in the Launcher release. It is currently a read-only catalog and does not install or update anything. The default Codex destination for future synchronization is `%USERPROFILE%\.codex\skills`; when `%CODEX_HOME%` is set, its `skills` directory is used instead.
+The launcher automatically installs bundled skills into `.agents\skills` at the drive root on first launch and after Launcher updates. For example, the game-import skill is stored at `.agents\skills\retrodrive-import-game\SKILL.md`. Open the drive root as your Codex working folder to use these project-scoped skills.
+
+The launcher keeps the installation on the portable drive. It preserves modified drive skills and records installation failures in `Launcher\data\launcher.log`. Previous managed versions are backed up under `Launcher\data\skill-backups`.
+
+## Backups
+
+Open **Settings → Backup** and choose **Start backup**. Snapshots are stored at `\\KAELTHAS\personal_folder\Backup\RetroDrive\restic` using Windows SMB access. The NAS share permissions control who can access the backups. Games are excluded while save data, settings, programs, firmware and library artwork are retained.
+
+**Load history** shows retained versions. Open a completed snapshot and confirm **Restore copy** to restore and verify it in a separate folder. **Open restored files** lets you review or copy those files. **Cancel operation** stops a current job. See [BACKUPS.md](BACKUPS.md) for exact scope and recovery behavior.
 
 ## Drive overview
 
-The Settings → Storage page reads the current portable drive rather than assuming a fixed drive letter. It reports free/used capacity, emulator directories under `RetroBat\emulators`, RetroArch core files, game files by platform, and the size of the main save/state directories. The scan is read-only and can be refreshed at any time.
+The Settings → Storage page shows free and used space on the current drive and counts games by platform. Choose **Rescan drive** to refresh the read-only scan.
 
 RetroBat and independent RetroArch data are intentionally isolated. Do not merge their save or state directories.
 

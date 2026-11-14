@@ -4,9 +4,9 @@
     {
       "id": "retrodrive-import-game",
       "displayName": "RetroDrive Game Import",
-      "description": "Safely import a game file or content directory into a RetroDrive portable installation, with read-only detection, platform-specific installation, rollback-friendly staging, integrity checks, and RetroBat launch metadata. Use when the user asks to add, prepare, normalize, decrypt, install, or verify a game for RetroDrive.",
-      "sha256": "e69ad734319a06792f1fe656763668375be306819e3f0b545b191fccbc38e8d1",
-      "bytes": 25240,
+      "description": "Import user-supplied games into RetroDrive with normalized names and content checks. Use for adding ROMs, installing unpacked PSVita games, or verifying an import; follow platform instructions for packages, disc conversions, and linked disc sets.",
+      "sha256": "40a2c08b1ea30ca082c2733dc0b04d0825f8c18705554a5182cfece505db6124",
+      "bytes": 31722,
       "files": [
         "SKILL.md",
         "agents/openai.yaml",
@@ -14,6 +14,7 @@
         "references/multidisc.md",
         "references/ps3.md",
         "references/psvita.md",
+        "references/wiiu.md",
         "references/xbox.md",
         "scripts/Import-RetroDriveGame.ps1"
       ]

@@ -11,9 +11,10 @@ This repository contains source code, tests, build configuration, dependency loc
 - `START.exe` is a small native Rust Windows-subsystem bootstrapper.
 - `RetroDriveLauncher.exe` is a Tauri 2 application with a Rust backend and vanilla TypeScript/HTML/CSS frontend.
 - `Updater.exe` is a native transactional updater that runs from a temporary copy so every launcher-owned executable can be replaced safely.
-- The launcher exposes RetroBat, independent RetroArch, and a Settings page with a read-only drive overview, automatic and manual signed update checks, and a bundled Skills catalog.
-- `skills/` contains the versioned, validated Codex skills shipped with the launcher. The Settings → Skills page provides a read-only view of the bundled skills.
+- The launcher exposes RetroBat, independent RetroArch, and a Settings page with a read-only drive overview and automatic and manual signed update checks.
+- `skills/` contains the versioned, validated Codex skills shipped with the launcher. On startup, including after an update, the launcher installs them into `.agents/skills` at the portable drive root. Open the drive root in Codex to use them.
 - Runtime executables are resolved from manifest-approved paths below the attached RetroDrive root.
+- Settings → Backup creates incremental restic snapshots in `\\KAELTHAS\personal_folder\Backup\RetroDrive\restic` using Windows SMB access. It excludes game content and restores historical versions into a separate folder. See [docs/BACKUPS.md](docs/BACKUPS.md).
 - ROMs, BIOS files, firmware, encryption keys, saves, credentials, and emulator binaries must never be committed to this repository.
 
 ## Repository Contract
@@ -34,11 +35,12 @@ The detailed implementation, security, packaging, and acceptance requirements ar
 
 ## Development
 
-Requirements: Node.js 24, pnpm 10.33.2, Rust 1.97.1, and the Visual Studio C++
+Requirements: Node.js 24, pnpm 10.33.2, PowerShell 7, Rust 1.97.1, and the Visual Studio C++
 desktop workload.
 
 ```powershell
 pnpm install --frozen-lockfile
+pnpm prepare:backup  # fetch and verify the pinned restic binary before direct Cargo commands
 pnpm check
 pnpm skills:manifest   # only after intentionally changing a skill
 pnpm build:release

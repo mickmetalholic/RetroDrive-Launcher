@@ -168,7 +168,12 @@ fn rollback(applied: &mut [AppliedFile]) -> Vec<String> {
     let mut errors = Vec::new();
     for change in applied.iter().rev() {
         if change.target.exists() {
-            if let Err(error) = fs::remove_file(&change.target) {
+            let result = if change.target.is_dir() {
+                fs::remove_dir_all(&change.target)
+            } else {
+                fs::remove_file(&change.target)
+            };
+            if let Err(error) = result {
                 errors.push(format!(
                     "Unable to remove {}: {error}",
                     change.target.display()
@@ -241,6 +246,17 @@ fn install_files(
     fs::create_dir_all(backup_root)
         .map_err(|error| format!("Unable to create update backup: {error}"))?;
     let mut ordered = files.to_vec();
+    if ordered.iter().any(|path| {
+        normalized_relative(path).is_some_and(|relative| relative.starts_with("Launcher/skills/"))
+    }) {
+        // Replace the release-owned tree as one transaction, including deletions.
+        // Root .agents/skills is deployed by the new launcher after relaunch.
+        ordered.retain(|path| {
+            !normalized_relative(path)
+                .is_some_and(|relative| relative.starts_with("Launcher/skills/"))
+        });
+        ordered.push(PathBuf::from("Launcher/skills"));
+    }
     ordered.sort_by_key(|path| {
         let relative = normalized_relative(path).unwrap_or_default();
         match relative.as_str() {
@@ -423,6 +439,52 @@ mod tests {
             fs::read(root.join("launcher.json")).unwrap(),
             b"user config"
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn skill_bundle_replacement_removes_stale_files_and_can_roll_back() {
+        let root = test_root();
+        let staging = root.join("Launcher/data/updates/staging");
+        let backup = root.join("Launcher/data/updates/previous");
+        let relative = Path::new("Launcher/skills");
+        fs::create_dir_all(root.join(relative)).unwrap();
+        fs::write(root.join(relative).join("obsolete.md"), b"old skill file").unwrap();
+        fs::create_dir_all(staging.join(relative)).unwrap();
+        fs::write(
+            staging.join(relative).join("skills-manifest.json"),
+            b"new manifest",
+        )
+        .unwrap();
+        let user_skill = root.join(".agents/skills/personal/SKILL.md");
+        fs::create_dir_all(user_skill.parent().unwrap()).unwrap();
+        fs::write(&user_skill, b"personal skill").unwrap();
+
+        install_files(
+            &root,
+            &staging,
+            &backup,
+            &[relative.join("skills-manifest.json")],
+        )
+        .unwrap();
+
+        assert!(!root.join(relative).join("obsolete.md").exists());
+        assert_eq!(
+            fs::read(backup.join(relative).join("obsolete.md")).unwrap(),
+            b"old skill file"
+        );
+        assert_eq!(fs::read(&user_skill).unwrap(), b"personal skill");
+        let mut changes = [AppliedFile {
+            target: root.join(relative),
+            backup: Some(backup.join(relative)),
+        }];
+        assert!(rollback(&mut changes).is_empty());
+        assert_eq!(
+            fs::read(root.join(relative).join("obsolete.md")).unwrap(),
+            b"old skill file"
+        );
+        assert!(!root.join(relative).join("skills-manifest.json").exists());
+        assert_eq!(fs::read(user_skill).unwrap(), b"personal skill");
         let _ = fs::remove_dir_all(root);
     }
 }

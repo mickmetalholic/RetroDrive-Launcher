@@ -1,16 +1,19 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { platformIcon } from "./platform-icons";
+import { sampleBackupAction, sampleBackupStatus } from "./preview-backup";
+import { sampleDriveOverview } from "./preview-drive";
 import "./styles.css";
 import type {
   ChildEndedEvent,
+  BackupStatus,
+  BackupSnapshot,
   DriveOverview,
   EntryId,
   HomeSelection,
   LauncherEntry,
   LauncherState,
   SettingsSection,
-  SkillStatus,
-  SkillSummary,
   UiMode,
   UpdateInfo,
 } from "./types";
@@ -23,20 +26,30 @@ function requireApplicationRoot(): HTMLDivElement {
 
 const app = requireApplicationRoot();
 const isTauriRuntime = "__TAURI_INTERNALS__" in window;
+const samplePage = import.meta.env.DEV && !isTauriRuntime
+  ? new URLSearchParams(window.location.search).get("mock")
+  : null;
+const showSampleData = samplePage === "storage" || samplePage === "backup";
 
 let entries: LauncherEntry[] = [];
-let skills: SkillSummary[] = [];
 let selected: HomeSelection = "retrobat";
-let selectedSkillIndex = 0;
 let mode: UiMode = "home";
 let settingsSection: SettingsSection = "overview";
+const sectionTitles: Record<SettingsSection, string> = {
+  overview: "Storage",
+  updates: "Updates",
+  backup: "Backup",
+};
+const settingsSections = Object.keys(sectionTitles) as SettingsSection[];
 let errorEntry: EntryId | null = null;
 let settingsError: string | null = null;
 let driveBusy = false;
 let driveOverview: DriveOverview | null = null;
 let updateBusy = false;
 let updateInfo: UpdateInfo | null = null;
-let skillBusy = false;
+let backupStatus: BackupStatus | null = null;
+let backupPoll: number | undefined;
+let pendingRestoreId: string | null = null;
 let inputLockedUntilNeutral = false;
 let launcherVersion = "0.2.2";
 type InputMethod = "keyboard" | "gamepad" | "mouse";
@@ -87,21 +100,22 @@ function formatDate(unix: number | null | undefined): string {
   });
 }
 
+const displayNames = new Map(Object.entries({
+  gba: "GBA",
+  snes: "SNES",
+  psx: "PS1",
+  ps2: "PS2",
+  ps3: "PS3",
+  psp: "PSP",
+  gamecube: "GameCube",
+  gc: "GameCube",
+  wiiu: "Wii U",
+}));
+
 function formatName(value: string): string {
-  return value
+  return displayNames.get(value.toLowerCase()) ?? value
     .replace(/[-_]+/g, " ")
     .replace(/\b[a-z]/g, (character) => character.toUpperCase());
-}
-
-function skillStatusLabel(status: SkillStatus): string {
-  const labels: Record<SkillStatus, string> = {
-    notInstalled: "Not installed",
-    upToDate: "Up to date",
-    updateAvailable: "Update available",
-    localChanges: "Local changes",
-    error: "Unavailable",
-  };
-  return labels[status];
 }
 
 function updateStatusLabel(status: UpdateInfo["status"]): string {
@@ -122,6 +136,10 @@ function homeItems(): HomeSelection[] {
 function setInputMethod(method: InputMethod): void {
   if (inputMethod === method) return;
   inputMethod = method;
+  const content = document.querySelector<HTMLElement>(".settings-content");
+  if (content) content.dataset.input = method;
+  const dialog = document.querySelector<HTMLDialogElement>(".restore-dialog");
+  if (dialog) dialog.dataset.input = method;
   updateInputHints();
 }
 
@@ -134,34 +152,40 @@ function homeHints(): string {
     return `${hint("D-PAD", "Navigate")}${hint("A", "Launch")}${hint("B", "Exit")}`;
   }
   if (inputMethod === "mouse") {
-    return `${hint("CLICK", "Launch")}${hint("ESC", "Exit")}`;
+    return hint("ESC", "Exit");
   }
   return `${hint("↑ ↓", "Navigate")}${hint("ENTER", "Launch")}${hint("ESC", "Exit")}`;
 }
 
-function settingsHints(): string {
+function settingsHints(snapshotFocused = false): string {
+  if (inputMethod === "mouse") {
+    return `${snapshotFocused ? hint("CLICK", "Open backup") : ""}${hint("ESC", "Back")}`;
+  }
   const tabHint =
     inputMethod === "gamepad"
       ? hint("LB / RB", "Switch tabs")
-      : inputMethod === "mouse"
-        ? hint("CLICK", "Switch tabs")
-        : hint("← →", "Switch tabs");
+      : hint("← →", "Switch tabs");
   const backHint = inputMethod === "gamepad" ? hint("B", "Back") : hint("ESC", "Back");
   let actionHint = "";
   if (settingsSection === "overview") {
-    actionHint = inputMethod === "gamepad" ? hint("A", "Refresh") : inputMethod === "mouse" ? hint("CLICK", "Refresh") : hint("R", "Refresh");
+    actionHint = inputMethod === "gamepad" ? hint("A", "Refresh") : hint("R", "Refresh");
   } else if (settingsSection === "updates") {
-    actionHint = inputMethod === "gamepad" ? hint("A", "Check") : inputMethod === "mouse" ? hint("CLICK", "Check") : hint("C", "Check");
+    actionHint = inputMethod === "gamepad" ? hint("A", "Check for updates") : hint("C", "Check for updates");
     if (updateInfo?.status === "available") {
-      actionHint += inputMethod === "gamepad" ? hint("X", "Install") : inputMethod === "mouse" ? hint("CLICK", "Install") : hint("I", "Install");
+      actionHint += inputMethod === "gamepad" ? hint("X", "Install") : hint("I", "Install");
     }
-  } else if (skills.length > 0) {
-    const browseHint = inputMethod === "gamepad" ? hint("D-PAD", "Browse skills") : hint("↑ ↓", "Browse skills");
-    const syncHint = inputMethod === "gamepad" ? hint("A", "Sync") : hint("ENTER", "Sync");
-    const syncAllHint = inputMethod === "gamepad" ? hint("X", "Sync all") : hint("X", "Sync all");
-    actionHint = `${browseHint}${syncHint}${syncAllHint}`;
+  } else if (settingsSection === "backup") {
+    actionHint = inputMethod === "gamepad"
+      ? `${hint("D-PAD", "Move")}${hint("A", snapshotFocused ? "Open backup" : "Select")}`
+      : `${hint("TAB", "Move")}${snapshotFocused ? hint("ENTER", "Open backup") : ""}`;
   }
   return `${tabHint}${actionHint}${backHint}`;
+}
+
+function restoreHints(): string {
+  if (inputMethod === "gamepad") return `${hint("D-PAD", "Move")}${hint("A", "Select")}${hint("B", "Back")}`;
+  if (inputMethod === "mouse") return hint("ESC", "Back");
+  return `${hint("TAB", "Move")}${hint("ENTER", "Select")}${hint("ESC", "Back")}`;
 }
 
 function updateIndicator(): string {
@@ -176,10 +200,12 @@ function updateIndicator(): string {
 
 function updateInputHints(): void {
   const hints = document.querySelector<HTMLElement>(".hints");
+  const restoreControls = document.querySelector<HTMLElement>(".restore-hints");
+  if (restoreControls) restoreControls.innerHTML = restoreHints();
   if (hints) {
     const content =
       mode === "settings"
-        ? settingsHints()
+        ? settingsHints(Boolean(focusedBackupControl()?.matches("[data-backup-snapshot]:enabled")))
         : mode === "error"
           ? `${inputMethod === "gamepad" ? hint("A", "Retry") : hint("ENTER", "Retry")}${inputMethod === "gamepad" ? hint("B", "Back") : hint("ESC", "Back")}`
           : homeHints();
@@ -193,12 +219,6 @@ function renderHome(): void {
     mode === "error" && errorEntry
       ? `Could not launch ${entryTitle(errorEntry)}`
       : "";
-  const diskSummary = driveOverview
-    ? `${formatBytes(driveOverview.freeBytes)} free · ${driveOverview.gameFiles} games`
-    : driveBusy
-      ? "Scanning drive…"
-      : "Open Storage for details";
-
   app.innerHTML = `
     <main class="shell home-shell ${animateScreenEnter ? "is-screen-entering" : ""}" aria-label="RetroDrive launcher">
       <header class="topbar">
@@ -246,19 +266,17 @@ function renderHome(): void {
 
       <section class="home-summary" aria-label="Drive summary">
         <article class="summary-card">
-          <div class="summary-label">${escapeHtml(driveOverview?.drive ?? "D:")} Drive</div>
-          <div class="summary-value">${driveOverview ? escapeHtml(formatBytes(driveOverview.usedBytes)) : "—"}</div>
-          <div class="summary-note">${escapeHtml(diskSummary)}</div>
+          <div class="summary-label">Free space</div>
+          <div class="summary-value">${driveOverview ? escapeHtml(formatBytes(driveOverview.freeBytes)) : "—"}</div>
+          ${driveBusy ? `<div class="summary-note">Scanning drive…</div>` : ""}
         </article>
         <article class="summary-card">
-          <div class="summary-label">Library</div>
+          <div class="summary-label">Games</div>
           <div class="summary-value">${driveOverview ? driveOverview.gameFiles : "—"}</div>
-          <div class="summary-note">${driveOverview ? `${driveOverview.systemsWithGames} platforms · ${formatBytes(driveOverview.gameBytes)}` : "Scanning in background"}</div>
         </article>
         <article class="summary-card">
           <div class="summary-label">Emulators</div>
           <div class="summary-value">${driveOverview ? driveOverview.emulatorCount : "—"}</div>
-          <div class="summary-note">${driveOverview ? `RetroArch · ${driveOverview.retroArchCoreCount} cores` : "Open Storage for details"}</div>
         </article>
       </section>
 
@@ -307,19 +325,20 @@ function renderHome(): void {
         renderHome();
       }
     });
-    button.addEventListener("click", () => void openSettings());
+    button.addEventListener("click", () => openSettings());
   });
 }
 
 function renderSettings(): void {
-  const sectionTitles: Record<SettingsSection, string> = {
-    overview: "Storage",
-    updates: "Updates",
-    skills: "Skills",
-  };
-  const sections = Object.keys(sectionTitles) as SettingsSection[];
-  const sectionNumber = String(sections.indexOf(settingsSection) + 1).padStart(2, "0");
-  const nav = (Object.keys(sectionTitles) as SettingsSection[])
+  const previousContent = document.querySelector<HTMLElement>(".settings-content");
+  const scrollTop = previousContent?.dataset.section === settingsSection ? previousContent.scrollTop : 0;
+  const backupFocus = focusedBackupControl()?.dataset.backupFocus;
+  const tabIndex = settingsSections.indexOf(settingsSection);
+  const showingSamples = showSampleData && settingsSection !== "updates";
+  const pageError = settingsSection === "updates" && updateInfo?.detail === settingsError
+    ? null
+    : settingsError;
+  const nav = settingsSections
     .map(
       (section) =>
         `<button class="settings-nav ${settingsSection === section ? "is-active" : ""}" data-settings-section="${section}" type="button" aria-current="${settingsSection === section ? "page" : "false"}"><span class="tab-label">${sectionTitles[section]}</span></button>`,
@@ -330,23 +349,21 @@ function renderSettings(): void {
       ? renderOverviewContent()
       : settingsSection === "updates"
         ? renderUpdateContent()
-        : renderSkillsContent();
+        : renderBackupContent();
 
   app.innerHTML = `
     <main class="shell settings-shell ${animateScreenEnter ? "is-screen-entering" : ""}" aria-label="RetroDrive settings">
       <header class="topbar">
         <div class="brand">RetroDrive</div>
       </header>
-      <nav class="settings-nav-bar ${animateSettingsTab ? "is-tab-changing" : ""}" data-active="${settingsSection}" aria-label="Settings sections">${nav}</nav>
-      <section class="settings-content ${animateSettingsPanel ? "is-section-entering" : ""}" data-section="${settingsSection}">
-        <div class="settings-heading">
-          <h1>${sectionTitles[settingsSection]}</h1>
-          <span class="section-index">${sectionNumber} / ${String(sections.length).padStart(2, "0")}</span>
-        </div>
-        ${settingsError ? `<p class="settings-error">${escapeHtml(settingsError)}</p>` : ""}
+      <nav class="settings-nav-bar ${animateSettingsTab ? "is-tab-changing" : ""}" data-active="${settingsSection}" style="--tab-index:${tabIndex}; --tab-count:${settingsSections.length}" aria-label="Settings sections">${nav}</nav>
+      <section class="settings-content ${animateSettingsPanel ? "is-section-entering" : ""}" data-section="${settingsSection}" data-input="${inputMethod}">
+        <h1 class="visually-hidden">${sectionTitles[settingsSection]}</h1>
+        ${showingSamples ? `<p class="sample-label">Sample data</p>` : ""}
+        ${pageError ? `<p class="settings-error">${escapeHtml(pageError)}</p>` : ""}
         ${content}
       </section>
-      <footer class="hints ${driveBusy || updateBusy || skillBusy ? "is-muted" : ""}">
+      <footer class="hints ${driveBusy || updateBusy ? "is-muted" : ""}">
         ${settingsHints()}<span class="footer-version">${updateIndicator()}RetroDrive v${escapeHtml(launcherVersion)}</span>
       </footer>
     </main>`;
@@ -355,10 +372,25 @@ function renderSettings(): void {
   animateSettingsTab = false;
   animateScreenEnter = false;
 
+  document.querySelectorAll<HTMLButtonElement>("[data-backup-action]").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (button.dataset.backupAction) void runBackupAction(button.dataset.backupAction);
+    });
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-backup-snapshot]").forEach((button) => {
+    button.addEventListener("click", () => {
+      pendingRestoreId = button.dataset.backupSnapshot ?? null;
+      renderSettings();
+    });
+  });
+  document.querySelector("[data-restore-back]")?.addEventListener("click", closeRestoreDialog);
+  document.querySelector("[data-backup-cancel]")?.addEventListener("click", () => void backupRequest("cancel_backup"));
+  document.querySelector("[data-open-restored]")?.addEventListener("click", () => void backupRequest("open_restored_files"));
+
   document.querySelectorAll<HTMLButtonElement>("[data-settings-section]").forEach((button) => {
     button.addEventListener("click", () => {
       const section = button.dataset.settingsSection as SettingsSection;
-      void switchSettingsSection(section);
+      switchSettingsSection(section);
     });
   });
   document.querySelectorAll<HTMLButtonElement>("[data-refresh-drive]").forEach((button) => {
@@ -370,119 +402,245 @@ function renderSettings(): void {
   document.querySelectorAll<HTMLButtonElement>("[data-install-update]").forEach((button) => {
     button.addEventListener("click", () => void installUpdate());
   });
-  document.querySelectorAll<HTMLButtonElement>("[data-skill-index]").forEach((row) => {
-    row.addEventListener("mouseenter", () => {
-      setInputMethod("mouse");
-      const nextIndex = Number(row.dataset.skillIndex);
-      if (selectedSkillIndex === nextIndex) return;
-      selectedSkillIndex = nextIndex;
-      renderSettings();
+  const nextContent = document.querySelector<HTMLElement>(".settings-content");
+  if (nextContent) nextContent.scrollTop = scrollTop;
+  const restoreDialog = document.querySelector<HTMLDialogElement>(".restore-dialog");
+  if (restoreDialog) {
+    restoreDialog.addEventListener("cancel", (event) => {
+      event.preventDefault();
+      closeRestoreDialog();
     });
-    row.addEventListener("click", () => {
-      setInputMethod("mouse");
-      const nextIndex = Number(row.dataset.skillIndex);
-      if (selectedSkillIndex === nextIndex) return;
-      selectedSkillIndex = nextIndex;
-      renderSettings();
-    });
-  });
+    restoreDialog.showModal();
+    const previous = availableBackupControls().find((control) => control.dataset.backupFocus === backupFocus);
+    previous?.focus();
+  } else if (settingsSection === "backup" && (backupFocus || inputMethod === "gamepad")) {
+    const controls = availableBackupControls();
+    const previous = controls.find((control) => control.dataset.backupFocus === backupFocus);
+    (previous ?? controls[0])?.focus({ preventScroll: true });
+  }
+}
+
+function focusedBackupControl(): HTMLButtonElement | null {
+  const control = document.activeElement;
+  return control instanceof HTMLButtonElement && control.matches("[data-backup-focus]")
+    ? control
+    : null;
+}
+
+function availableBackupControls(): HTMLButtonElement[] {
+  const scope = document.querySelector(".restore-dialog[open]") ?? app;
+  return [...scope.querySelectorAll<HTMLButtonElement>("[data-backup-focus]:enabled")];
+}
+
+function closeRestoreDialog(): void {
+  const snapshotId = pendingRestoreId;
+  pendingRestoreId = null;
+  renderSettings();
+  const row = availableBackupControls().find((control) => control.dataset.backupSnapshot === snapshotId);
+  row?.focus({ preventScroll: true });
+  row?.scrollIntoView({ block: "nearest", inline: "nearest" });
+}
+
+function moveBackupFocus(horizontal: number, vertical: number): void {
+  const controls = availableBackupControls();
+  const current = focusedBackupControl();
+  let next: HTMLButtonElement | undefined = controls[0];
+  if (current && !current.disabled) {
+    const bounds = current.getBoundingClientRect();
+    const centerX = bounds.x + bounds.width / 2;
+    const centerY = bounds.y + bounds.height / 2;
+    let best = Infinity;
+    next = undefined;
+    for (const control of controls) {
+      if (control === current) continue;
+      const target = control.getBoundingClientRect();
+      const dx = target.x + target.width / 2 - centerX;
+      const dy = target.y + target.height / 2 - centerY;
+      const forward = horizontal ? dx * horizontal : dy * vertical;
+      const side = horizontal ? Math.abs(dy) : Math.max(0, target.left - centerX, centerX - target.right);
+      if (forward <= 4 || (horizontal && side > (bounds.height + target.height) / 3)) continue;
+      // Keep vertical moves on the nearest row even when it only has an action on one side.
+      const distance = forward + (horizontal ? side * 3 : Math.min(side, 40) * .35);
+      if (distance >= best) continue;
+      best = distance;
+      next = control;
+    }
+  }
+  next?.focus({ preventScroll: true });
+  next?.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
 
 function renderOverviewContent(): string {
-  if (driveBusy && !driveOverview) {
-    return `<div class="loading-panel"><span class="spinner"></span><strong>Scanning drive…</strong><p>Reading emulators, platforms and save data.</p></div>`;
+  const drive = driveOverview;
+  if (driveBusy && !drive) {
+    return `<div class="loading-panel" role="status"><span class="spinner" aria-hidden="true"></span><strong>Scanning drive…</strong></div>`;
   }
-  if (!driveOverview) {
-    return `<div class="loading-panel"><strong>No drive snapshot</strong><p>Refresh to read the current RetroDrive volume.</p><button class="primary-button" data-refresh-drive type="button">Refresh drive</button></div>`;
+  if (!drive) {
+    return isTauriRuntime
+      ? `<div class="loading-panel"><strong>Drive data unavailable</strong><button class="primary-button" data-refresh-drive type="button">Refresh drive</button></div>`
+      : `<div class="loading-panel"><strong>Drive data is available in the desktop app.</strong></div>`;
   }
-  const usedPercent = driveOverview.totalBytes
-    ? Math.min(100, Math.max(0, (driveOverview.usedBytes / driveOverview.totalBytes) * 100))
+  const usedPercent = drive.totalBytes
+    ? Math.min(100, Math.max(0, (drive.usedBytes / drive.totalBytes) * 100))
     : 0;
-  const platformRows = driveOverview.platforms
-    .slice(0, 12)
+  const maxGames = drive.platforms[0]?.gameFiles || 1;
+  const platformRows = drive.platforms
     .map((platform) => {
-      const max = driveOverview?.platforms[0]?.gameFiles || 1;
-      const width = Math.max(4, (platform.gameFiles / max) * 100);
-      return `<div class="platform-row"><div><span>${escapeHtml(formatName(platform.name))}</span><span>${platform.gameFiles}</span></div><div class="platform-bar"><span style="width:${width}%"></span></div></div>`;
+      const width = (platform.gameFiles / maxGames) * 100;
+      return `<li class="platform-row">
+        <span class="platform-name">${platformIcon(platform.name)}<span>${escapeHtml(formatName(platform.name))}</span></span>
+        <span class="platform-bar" aria-hidden="true"><span style="width:${width}%"></span></span>
+        <span class="platform-count">${platform.gameFiles.toLocaleString()}</span>
+      </li>`;
     })
     .join("");
-  const emulatorChips = driveOverview.emulators
-    .slice(0, 28)
-    .map((emulator) => `<span class="emulator-chip" title="${escapeHtml(emulator.path)}">${escapeHtml(formatName(emulator.name))}</span>`)
-    .join("");
-  const warnings = driveOverview.warnings.length
-    ? `<div class="scan-warnings"><strong>Scan notes</strong><span>${escapeHtml(driveOverview.warnings.slice(0, 3).join(" · "))}</span></div>`
+  const warnings = drive.warnings.length
+    ? `<details class="scan-warnings"><summary>Scan notes</summary><ul>${drive.warnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join("")}</ul></details>`
     : "";
 
   return `
-    <div class="overview-grid">
-      <article class="setting-card storage-card">
-        <div class="card-topline"><span class="card-kicker">${escapeHtml(driveOverview.drive)} / Capacity</span><span class="card-icon">◉</span></div>
-        <div class="large-number">${escapeHtml(formatBytes(driveOverview.usedBytes))}<small> used</small></div>
-        <div class="storage-meter"><span style="width:${usedPercent.toFixed(1)}%"></span></div>
-        <div class="card-meta"><span>${escapeHtml(formatBytes(driveOverview.freeBytes))} free</span><span>${escapeHtml(formatBytes(driveOverview.totalBytes))} total</span></div>
-        <div class="stat-pairs"><div><span>Root</span><strong>${escapeHtml(driveOverview.root)}</strong></div><div><span>Scanned</span><strong>${escapeHtml(formatDate(driveOverview.scannedAtUnix))}</strong></div></div>
-      </article>
-      <article class="setting-card library-card">
-        <div class="card-topline"><span class="card-kicker">Library</span><span class="card-icon">▦</span></div>
-        <div class="large-number">${driveOverview.gameFiles}<small> games</small></div>
-        <div class="card-meta"><span>${driveOverview.systemsWithGames} platforms</span><span>${escapeHtml(formatBytes(driveOverview.gameBytes))}</span></div>
-        <div class="stat-pairs"><div><span>System folders</span><strong>${driveOverview.platformCount}</strong></div><div><span>Saves / states</span><strong>${escapeHtml(formatBytes(driveOverview.saveBytes))}</strong></div></div>
-      </article>
-      <article class="setting-card emulator-card">
-        <div class="card-topline"><span class="card-kicker">Emulators</span><span class="card-icon">✦</span></div>
-        <div class="large-number">${driveOverview.emulatorCount}<small> found</small></div>
-        <div class="card-meta"><span>RetroBat folders</span><span>${driveOverview.retroArchCoreCount} cores</span></div>
-        <div class="stat-pairs"><div><span>RetroBat</span><strong>${driveOverview.emulators.some((emulator) => emulator.name.toLowerCase() === "retroarch") ? "Detected" : "Installed"}</strong></div><div><span>ROM root</span><strong>${escapeHtml(driveOverview.romRoot)}</strong></div></div>
-      </article>
-    </div>
-    <div class="overview-lower">
-      <article class="setting-card list-card"><div class="card-heading"><div><span class="card-kicker">Library mix</span><h2>Games by platform</h2></div><span class="muted">Top 12</span></div><div class="platform-list">${platformRows || `<p class="empty-state">No game files detected.</p>`}</div></article>
-      <article class="setting-card list-card"><div class="card-heading"><div><span class="card-kicker">Runtime</span><h2>Detected emulators</h2></div><span class="muted">${driveOverview.emulatorCount}</span></div><div class="emulator-list">${emulatorChips || `<p class="empty-state">No RetroBat emulator folders found.</p>`}</div>${driveOverview.emulators.length > 28 ? `<p class="list-footnote">${driveOverview.emulators.length - 28} more folders. Hover for paths.</p>` : ""}</article>
-    </div>
-    ${warnings}
-    <div class="settings-actions"><button class="secondary-button" data-refresh-drive type="button" ${driveBusy ? "disabled" : ""}>${driveBusy ? "Scanning…" : "Rescan drive"}</button><span>Read-only scan</span></div>`;
+    <section class="setting-card storage-capacity" aria-label="Drive space">
+      <div class="storage-capacity-heading">
+        <p class="storage-free">${formatBytes(drive.freeBytes)} <span>free</span></p>
+        <button class="secondary-button" data-refresh-drive type="button" ${driveBusy ? "disabled" : ""}>${showSampleData ? "Reload sample" : driveBusy ? "Scanning…" : "Rescan drive"}</button>
+      </div>
+      <div class="storage-meter" aria-hidden="true"><span style="width:${usedPercent.toFixed(1)}%"></span></div>
+      <div class="storage-meter-labels"><span>${formatBytes(drive.usedBytes)} used</span><span>${formatBytes(drive.totalBytes)} total</span></div>
+    </section>
+    <section class="storage-library">
+      <div class="storage-list-heading"><h2>Games</h2><span>${drive.gameFiles.toLocaleString()}</span></div>
+      <p class="storage-list-summary">${drive.systemsWithGames.toLocaleString()} platforms · ${formatBytes(drive.gameBytes)}</p>
+      ${platformRows ? `<ul class="platform-list">${platformRows}</ul>` : ""}
+    </section>
+    ${warnings}`;
 }
 
 function renderUpdateContent(): string {
   const info = updateInfo;
   const available = info?.status === "available" && info.availableVersion;
+  const status = info?.status ?? "notChecked";
+  const statusText = !isTauriRuntime
+    ? "Updates are available in the desktop app."
+    : updateBusy && status !== "installing" ? "Checking…" : updateStatusLabel(status);
+  const detail = status === "failed" || status === "installing" ? info?.detail : null;
   const notes = info?.notes ? `<div class="release-notes"><span class="card-kicker">Release notes</span><p>${escapeHtml(info.notes)}</p></div>` : "";
   return `
-    <div class="update-layout">
       <article class="setting-card update-card ${available ? "has-update" : ""}">
-        <div class="card-topline"><span class="card-kicker">Launcher version</span><span class="card-icon">↗</span></div>
+        <div class="card-kicker">Launcher version</div>
         <div class="version-line"><span>v${escapeHtml(info?.currentVersion ?? launcherVersion)}</span>${available ? `<b>→</b><strong>v${escapeHtml(info.availableVersion ?? "")}</strong>` : ""}</div>
-        <div class="update-status status-${info?.status ?? "notChecked"}">${escapeHtml(info ? updateStatusLabel(info.status) : "Not checked")}</div>
-        <p class="update-detail">${escapeHtml(info?.detail ?? "Checking for signed releases…")}</p>
-        <div class="update-actions"><button class="secondary-button" data-check-update type="button" ${updateBusy ? "disabled" : ""}>${updateBusy ? "Checking…" : "Check for updates"}</button>${available ? `<button class="primary-button" data-install-update type="button" ${updateBusy ? "disabled" : ""}>Install update</button>` : ""}</div>
-        <div class="update-meta"><span>Last checked: ${escapeHtml(formatDate(info?.checkedAtUnix))}</span>${info?.publishedAt ? `<span>Published: ${escapeHtml(formatDate(Date.parse(info.publishedAt) / 1000))}</span>` : ""}</div>
+        <div class="update-status status-${status}" role="status">${escapeHtml(statusText)}</div>
+        ${detail ? `<p class="update-detail">${escapeHtml(detail)}</p>` : ""}
+        <div class="update-actions"><button class="secondary-button" data-check-update type="button" ${updateBusy || !isTauriRuntime ? "disabled" : ""}>Check for updates</button>${available ? `<button class="primary-button" data-install-update type="button" ${updateBusy ? "disabled" : ""}>Install update</button>` : ""}</div>
+        ${info?.checkedAtUnix || info?.publishedAt ? `<div class="update-meta">${info.checkedAtUnix ? `<span>Last checked ${escapeHtml(formatDate(info.checkedAtUnix))}</span>` : ""}${info.publishedAt ? `<span>Published ${escapeHtml(formatDate(Date.parse(info.publishedAt) / 1000))}</span>` : ""}</div>` : ""}
       </article>
-      <aside class="setting-card update-guide"><span class="card-kicker">Update channel</span><h2>Automatic checks</h2><p>A background check runs after launch. You can always check again here before installing.</p><div class="check-list"><span>✓ Signed manifest</span><span>✓ SHA-256 package</span><span>✓ Rollback copy</span></div></aside>
-    </div>
     ${notes}`;
 }
 
-function renderSkillsContent(): string {
-  const current = skills[selectedSkillIndex];
-  const rows = skills.length
-    ? skills
-        .map(
-          (skill, index) => `<button class="skill-row ${index === selectedSkillIndex ? "is-selected" : ""}" data-skill-index="${index}" type="button" ${skillBusy ? "disabled" : ""}><span class="skill-row-title">${escapeHtml(skill.displayName)}</span><span class="skill-row-status status-${skill.status}">${skillStatusLabel(skill.status)}</span></button>`,
-        )
-        .join("")
-    : `<p class="empty-state">No bundled Skills found.</p>`;
-  const detail = current
-    ? `<div class="skill-detail-status status-${current.status}">${skillStatusLabel(current.status)}</div><p>${escapeHtml(current.description)}</p><div class="skill-path">Target: ${escapeHtml(current.destination)}</div>`
-    : `<div class="skill-detail-status">Unavailable</div><p>Make sure Launcher/skills/skills-manifest.json is present.</p>`;
-  return `
-    <div class="skills-layout">
-      <div class="skill-list">${rows}</div>
-      <aside class="setting-card skill-detail"><div class="card-topline"><span class="card-kicker">Codex Skill</span><span class="card-icon">✣</span></div><h2>${escapeHtml(current?.displayName ?? "Skills")}</h2>${detail}</aside>
-    </div>`;
+function formatSnapshotSizes(snapshot: Pick<BackupSnapshot, "bytes" | "addedBytes">): string {
+  return `${formatBytes(snapshot.bytes)} · ${formatBytes(snapshot.addedBytes)} added`;
+}
+
+function renderBackupContent(): string {
+  const state = backupStatus;
+  const busy = state?.busy ?? false;
+  const unavailable = !isTauriRuntime && !showSampleData;
+  const disabled = (condition: boolean) => condition ? "disabled" : "";
+  const snapshots = state?.snapshots ?? [];
+  const restoreSnapshot = pendingRestoreId
+    ? snapshots.find((snapshot) => snapshot.id === pendingRestoreId && snapshot.complete)
+    : undefined;
+  if (!restoreSnapshot) pendingRestoreId = null;
+  const lastSuccess = state?.lastSuccess;
+  const operation = state && state.phase !== "idle" ? state : null;
+  const percent = state?.totalBytes ? Math.min(100, 100 * state.bytesDone / state.totalBytes) : 0;
+  return `<div class="backup-layout">
+    <section class="setting-card backup-main">
+      <div class="backup-toolbar">
+        <div><h2>Backup destination</h2>
+          <code class="backup-destination">${escapeHtml(state?.repository ?? "\\\\KAELTHAS\\personal_folder\\Backup\\RetroDrive\\restic")}</code>
+        </div>
+        <div class="backup-actions">
+          ${busy ? `<button class="secondary-button" data-backup-cancel data-backup-focus="cancel">Cancel operation</button>` : `
+            <button class="primary-button" data-backup-action="backup" data-backup-focus="backup" ${disabled(unavailable)}>Start backup</button>`}
+        </div>
+      </div>
+      ${operation ? `<div class="backup-state" role="status"><strong>${escapeHtml(operation.phase.replace(/([A-Z])/g, " $1"))}</strong>${operation.detail ? `<span>${escapeHtml(operation.detail)}</span>` : ""}</div>` : ""}
+      ${busy ? `<progress aria-label="Backup progress" max="100" ${state?.totalBytes ? `value="${percent}"` : ""}></progress>${state?.totalBytes ? `<div class="backup-progress-note">${state.filesDone} files · ${formatBytes(state.bytesDone)} / ${formatBytes(state.totalBytes)}</div>` : ""}` : ""}
+    </section>
+    <section class="backup-history"><div class="backup-toolbar"><h2>Backup history</h2><button class="secondary-button" data-backup-action="history" data-backup-focus="history" ${disabled(busy || unavailable)}>${snapshots.length ? "Refresh history" : "Load history"}</button></div>
+      ${snapshots.length ? `
+          <ul class="backup-snapshots" aria-label="Snapshots">
+            ${snapshots.map((snapshot) => `
+              <li><button class="backup-snapshot" type="button" data-backup-snapshot="${escapeHtml(snapshot.id)}" data-backup-focus="snapshot-${escapeHtml(snapshot.id)}" ${snapshot.complete ? 'aria-haspopup="dialog"' : ""} ${disabled(busy || unavailable || !snapshot.complete)}>
+                <span class="snapshot-info">
+                  <strong>${escapeHtml(formatDate(Date.parse(snapshot.time) / 1000))}</strong>
+                  <span class="snapshot-id">${escapeHtml(snapshot.id.slice(0, 8))}</span>
+                </span>
+                <span class="snapshot-stats">
+                  ${snapshot.complete ? `<span>${snapshot.files.toLocaleString()} files</span>` : `<span class="snapshot-incomplete">Incomplete</span>`}
+                  <span class="snapshot-sizes">${formatSnapshotSizes(snapshot)}</span>
+                </span>
+              </button></li>
+            `).join("")}
+          </ul>`
+        : lastSuccess ? `<p>Last successful backup · ${escapeHtml(formatDate(Date.parse(lastSuccess.time) / 1000))}<br>${lastSuccess.files.toLocaleString()} files · ${formatSnapshotSizes(lastSuccess)}</p>`
+          : `<p>No snapshots loaded.</p>`}
+      ${state?.restorePath ? `<div class="backup-recovery">
+        <code class="backup-destination">${escapeHtml(state.restorePath)}</code>
+        ${isTauriRuntime ? `<button class="secondary-button" data-open-restored data-backup-focus="open-restore" ${disabled(busy)}>Open restored files</button>` : ""}
+      </div>` : ""}
+    </section>
+    ${restoreSnapshot ? `<dialog class="restore-dialog setting-card" aria-labelledby="restore-title" aria-describedby="restore-description" data-input="${inputMethod}">
+      <h2 id="restore-title">Restore this backup?</h2>
+      <p class="restore-version"><strong>${escapeHtml(formatDate(Date.parse(restoreSnapshot.time) / 1000))}</strong> · ${escapeHtml(restoreSnapshot.id.slice(0, 8))}</p>
+      <p id="restore-description">Restores to a separate folder.</p>
+      <div class="backup-actions">
+        <button class="secondary-button" type="button" data-restore-back data-backup-focus="restore-back" autofocus>Back</button>
+        <button class="primary-button" type="button" data-backup-action="restore" data-backup-focus="restore-confirm" ${disabled(busy || unavailable)}>Restore copy</button>
+      </div>
+      <div class="restore-hints">${restoreHints()}</div>
+    </dialog>` : ""}
+  </div>`;
+}
+
+async function refreshBackupStatus(): Promise<void> {
+  if (!isTauriRuntime) return;
+  try {
+    backupStatus = await invoke<BackupStatus>("get_backup_status");
+    if (mode === "settings" && settingsSection === "backup") renderSettings();
+  } catch (error) {
+    settingsError = error instanceof Error ? error.message : String(error);
+    if (mode === "settings" && settingsSection === "backup") renderSettings();
+  }
+  window.clearTimeout(backupPoll);
+  if (backupStatus?.busy) backupPoll = window.setTimeout(() => void refreshBackupStatus(), 700);
+}
+
+async function backupRequest(command: string, args?: Record<string, unknown>): Promise<void> {
+  if (!isTauriRuntime) return;
+  settingsError = null;
+  try { await invoke(command, args); }
+  catch (error) { settingsError = error instanceof Error ? error.message : String(error); }
+  await refreshBackupStatus();
+}
+
+async function runBackupAction(action: string): Promise<void> {
+  const snapshotId = action === "restore" ? pendingRestoreId : null;
+  if (action === "restore") {
+    if (!snapshotId || backupStatus?.busy ||
+        !backupStatus?.snapshots.some((snapshot) => snapshot.id === snapshotId && snapshot.complete)) return;
+    closeRestoreDialog();
+  }
+  if (showSampleData && backupStatus) {
+    backupStatus = sampleBackupAction(backupStatus, action, snapshotId ?? "");
+    renderSettings();
+    return;
+  }
+  await backupRequest("backup_action", { action, snapshotId });
 }
 
 async function launch(id: EntryId): Promise<void> {
+  if (backupStatus?.busy) { openSettings("backup"); return; }
   if (mode === "launching") return;
   selected = id;
   mode = "launching";
@@ -497,50 +655,12 @@ async function launch(id: EntryId): Promise<void> {
   }
 }
 
-async function refreshSkills(): Promise<void> {
-  if (!isTauriRuntime) {
-    skills = [];
+async function refreshDriveOverview(): Promise<void> {
+  if (showSampleData) {
+    driveOverview = sampleDriveOverview();
+    render();
     return;
   }
-  skills = await invoke<SkillSummary[]>("list_skills");
-  selectedSkillIndex = Math.min(selectedSkillIndex, Math.max(0, skills.length - 1));
-}
-
-async function syncSelectedSkill(): Promise<void> {
-  if (mode !== "settings" || settingsSection !== "skills" || skillBusy || !isTauriRuntime) return;
-  const skill = skills[selectedSkillIndex];
-  if (!skill) return;
-  skillBusy = true;
-  settingsError = null;
-  renderSettings();
-  try {
-    await invoke<SkillSummary>("sync_skill", { skillId: skill.id });
-    await refreshSkills();
-  } catch (error) {
-    settingsError = error instanceof Error ? error.message : String(error);
-  } finally {
-    skillBusy = false;
-    if (mode === "settings" && settingsSection === "skills") renderSettings();
-  }
-}
-
-async function syncAllSkills(): Promise<void> {
-  if (mode !== "settings" || settingsSection !== "skills" || skillBusy || !isTauriRuntime || skills.length === 0) return;
-  skillBusy = true;
-  settingsError = null;
-  renderSettings();
-  try {
-    skills = await invoke<SkillSummary[]>("sync_all_skills");
-    selectedSkillIndex = Math.min(selectedSkillIndex, Math.max(0, skills.length - 1));
-  } catch (error) {
-    settingsError = error instanceof Error ? error.message : String(error);
-  } finally {
-    skillBusy = false;
-    if (mode === "settings" && settingsSection === "skills") renderSettings();
-  }
-}
-
-async function refreshDriveOverview(): Promise<void> {
   if (driveBusy || !isTauriRuntime) return;
   driveBusy = true;
   if (mode === "settings" || mode === "home") render();
@@ -634,10 +754,11 @@ async function installUpdate(): Promise<void> {
   }
 }
 
-async function openSettings(section: SettingsSection = "overview"): Promise<void> {
+function openSettings(section: SettingsSection = "overview"): void {
   if (mode === "launching" || mode === "exit") return;
   mode = "settings";
   selected = "settings";
+  pendingRestoreId = null;
   settingsSection = section;
   settingsError = null;
   animateScreenEnter = true;
@@ -646,40 +767,19 @@ async function openSettings(section: SettingsSection = "overview"): Promise<void
   renderSettings();
   if (section === "overview" && !driveOverview) void refreshDriveOverview();
   if (section === "updates") void loadUpdateStatus();
-  if (section === "skills") {
-    try {
-      await refreshSkills();
-    } catch (error) {
-      settingsError = error instanceof Error ? error.message : String(error);
-    }
-    if (mode === "settings" && settingsSection === "skills") {
-      animateSettingsPanel = true;
-      animateSettingsTab = true;
-      renderSettings();
-    }
-  }
+  if (section === "backup") void refreshBackupStatus();
 }
 
-async function switchSettingsSection(section: SettingsSection): Promise<void> {
+function switchSettingsSection(section: SettingsSection): void {
   if (section === settingsSection) return;
+  pendingRestoreId = null;
   settingsSection = section;
   settingsError = null;
   animateSettingsPanel = true;
   animateSettingsTab = true;
   renderSettings();
   if (section === "updates") void loadUpdateStatus();
-  if (section === "skills") {
-    try {
-      await refreshSkills();
-    } catch (error) {
-      settingsError = error instanceof Error ? error.message : String(error);
-    }
-    if (mode === "settings" && settingsSection === "skills") {
-      animateSettingsPanel = true;
-      animateSettingsTab = true;
-      renderSettings();
-    }
-  }
+  if (section === "backup") void refreshBackupStatus();
 }
 
 function moveHomeFocus(direction: number): void {
@@ -699,17 +799,10 @@ function moveHomeFocus(direction: number): void {
 
 function moveSettingsSection(direction: number): void {
   if (mode !== "settings") return;
-  const sections: SettingsSection[] = ["overview", "updates", "skills"];
-  const index = sections.indexOf(settingsSection);
-  const next = Math.max(0, Math.min(sections.length - 1, index + direction));
-  const section = sections[next];
-  if (section && section !== settingsSection) void switchSettingsSection(section);
-}
-
-function moveSkillFocus(direction: number): void {
-  if (mode !== "settings" || settingsSection !== "skills" || skills.length === 0) return;
-  selectedSkillIndex = Math.max(0, Math.min(skills.length - 1, selectedSkillIndex + direction));
-  renderSettings();
+  const index = settingsSections.indexOf(settingsSection);
+  const next = Math.max(0, Math.min(settingsSections.length - 1, index + direction));
+  const section = settingsSections[next];
+  if (section && section !== settingsSection) switchSettingsSection(section);
 }
 
 function confirmAction(): void {
@@ -718,12 +811,16 @@ function confirmAction(): void {
   } else if (mode === "error" && errorEntry) {
     void launch(errorEntry);
   } else if (mode === "home") {
-    if (selected === "settings") void openSettings();
+    if (selected === "settings") openSettings();
     else void launch(selected);
   } else if (mode === "settings") {
     if (settingsSection === "overview") void refreshDriveOverview();
     else if (settingsSection === "updates") void checkForUpdate();
-    else if (settingsSection === "skills") void syncSelectedSkill();
+    else if (settingsSection === "backup") {
+      const control = focusedBackupControl();
+      if (control) control.click();
+      else moveBackupFocus(0, 1);
+    }
   }
 }
 
@@ -731,11 +828,12 @@ function secondaryAction(): void {
   if (mode !== "settings" || updateBusy || driveBusy) return;
   if (settingsSection === "updates") void installUpdate();
   else if (settingsSection === "overview") void refreshDriveOverview();
-  else if (settingsSection === "skills") void syncAllSkills();
 }
 
 function backAction(): void {
-  if (mode === "settings" || mode === "exit" || mode === "error") {
+  if (pendingRestoreId) {
+    closeRestoreDialog();
+  } else if (mode === "settings" || mode === "exit" || mode === "error") {
     const wasSettings = mode === "settings";
     mode = "home";
     selected = "retrobat";
@@ -751,28 +849,39 @@ function backAction(): void {
 }
 
 async function exitLauncher(): Promise<void> {
+  if (backupStatus?.busy) { openSettings("backup"); return; }
   if (isTauriRuntime) await invoke("close_launcher");
 }
 
 window.addEventListener("keydown", (event) => {
   if (event.repeat) return;
   setInputMethod("keyboard");
+  if (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement || event.target instanceof HTMLTextAreaElement || (settingsSection === "backup" && event.target instanceof HTMLButtonElement && ["Enter", " "].includes(event.key))) return;
   if ((event.key === "s" || event.key === "S") && mode === "home") {
-    void openSettings();
+    openSettings();
     return;
   }
   if (mode === "launching") return;
   if (mode === "settings") {
+    if (settingsSection === "backup" && focusedBackupControl()) {
+      const horizontal = Number(event.key === "ArrowRight") - Number(event.key === "ArrowLeft");
+      const vertical = Number(event.key === "ArrowDown") - Number(event.key === "ArrowUp");
+      if (horizontal || vertical) {
+        event.preventDefault();
+        moveBackupFocus(horizontal, horizontal ? 0 : vertical);
+        return;
+      }
+    }
     if (event.key === "ArrowLeft") moveSettingsSection(-1);
     if (event.key === "ArrowRight") moveSettingsSection(1);
-    if (settingsSection === "skills" && event.key === "ArrowUp") moveSkillFocus(-1);
-    if (settingsSection === "skills" && event.key === "ArrowDown") moveSkillFocus(1);
     if (event.key === "Enter" || event.key === " ") confirmAction();
     if (settingsSection === "overview" && (event.key === "r" || event.key === "R")) void refreshDriveOverview();
     if (settingsSection === "updates" && (event.key === "c" || event.key === "C")) void checkForUpdate();
     if (settingsSection === "updates" && (event.key === "i" || event.key === "I")) void installUpdate();
-    if (settingsSection === "skills" && (event.key === "x" || event.key === "X")) void syncAllSkills();
-    if (event.key === "Backspace" || event.key === "Escape") backAction();
+    if (event.key === "Backspace" || event.key === "Escape") {
+      if (pendingRestoreId) event.preventDefault();
+      backAction();
+    }
     return;
   }
   if (driveBusy || updateBusy) return;
@@ -789,6 +898,13 @@ window.addEventListener("keydown", (event) => {
 });
 
 window.addEventListener("pointermove", () => setInputMethod("mouse"), { passive: true });
+app.addEventListener("focusin", () => {
+  if (mode === "settings" && settingsSection === "backup" && !pendingRestoreId) updateInputHints();
+});
+app.addEventListener("focusout", (event) => {
+  if (!pendingRestoreId && event.target instanceof HTMLElement && event.target.matches("[data-backup-snapshot]") &&
+      !(event.relatedTarget instanceof Node && app.contains(event.relatedTarget))) updateInputHints();
+});
 
 interface PadMemory {
   buttons: boolean[];
@@ -817,7 +933,6 @@ function pollGamepads(now: number): void {
 
   for (const pad of pads) {
     if (!pad) continue;
-    setInputMethod("gamepad");
     const memory = padMemory.get(pad.index) ?? {
       buttons: [],
       horizontal: 0,
@@ -836,6 +951,10 @@ function pollGamepads(now: number): void {
         : pad.buttons[13]?.pressed || (pad.axes[1] ?? 0) > 0.35
           ? 1
           : 0;
+    if (horizontal || vertical || pad.buttons.some((button) => button.pressed)) {
+      setInputMethod("gamepad");
+    }
+    const directionChanged = horizontal !== memory.horizontal || vertical !== memory.vertical;
     if (
       (mode === "home" || mode === "error") &&
       horizontal !== 0 &&
@@ -844,19 +963,15 @@ function pollGamepads(now: number): void {
       moveHomeFocus(horizontal);
       memory.repeatAt = now + (horizontal === memory.horizontal ? 100 : 350);
     }
-    if (
-      mode === "settings" &&
-      settingsSection === "skills" &&
-      vertical !== 0 &&
-      (vertical !== memory.vertical || now >= memory.repeatAt)
-    ) {
-      moveSkillFocus(vertical);
-      memory.repeatAt = now + (vertical === memory.vertical ? 100 : 350);
+    if (mode === "settings" && settingsSection === "backup" && (horizontal || vertical) &&
+        (directionChanged || now >= memory.repeatAt)) {
+      moveBackupFocus(vertical ? 0 : horizontal, vertical);
+      memory.repeatAt = now + (directionChanged ? 350 : 100);
     }
     const pressedEdge = (index: number) =>
       Boolean(pad.buttons[index]?.pressed) && !Boolean(memory.buttons[index]);
     const shoulderDirection = pressedEdge(4) ? -1 : pressedEdge(5) ? 1 : 0;
-    if (mode === "settings" && shoulderDirection !== 0) {
+    if (mode === "settings" && !pendingRestoreId && shoulderDirection !== 0) {
       moveSettingsSection(shoulderDirection);
     }
     if (mode === "settings") {
@@ -887,7 +1002,13 @@ async function boot(): Promise<void> {
       { id: "retroarch", title: "RetroArch", primary: false },
     ];
     selected = "retrobat";
-    renderHome();
+    if (showSampleData) {
+      driveOverview = sampleDriveOverview();
+      backupStatus = sampleBackupStatus();
+      openSettings(samplePage === "backup" ? "backup" : "overview");
+    } else {
+      renderHome();
+    }
     requestAnimationFrame(pollGamepads);
     return;
   }
@@ -906,6 +1027,7 @@ async function boot(): Promise<void> {
       inputLockedUntilNeutral = true;
       renderHome();
     });
+    await listen("backup-close-blocked", () => openSettings("backup"));
     renderHome();
     requestAnimationFrame(pollGamepads);
     void refreshDriveOverview();
